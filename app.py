@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import re
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, g
@@ -7,15 +6,181 @@ from flask import Flask, render_template, request, jsonify, g
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "aprov.db")
 
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_POSTGRES = DATABASE_URL.startswith("postgres") or DATABASE_URL.startswith("postgresql")
+
 app = Flask(__name__)
 
 
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
-    return g.db
+# ============================================================================
+# Camada de banco de dados:
+#   * LOCAL  -> SQLite (aprov.db)  [sem DATABASE_URL]
+#   * VERCELL -> PostgreSQL        [com DATABASE_URL, ex.: vercel-postgres/neon]
+# Mantém a mesma interface usada nas rotas (execute/commit/close, lastrowid,
+# linhas acessíveis por nome de coluna).
+# ============================================================================
+if USE_POSTGRES:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    def _pg_connect():
+        url = DATABASE_URL
+        if "sslmode" not in url:
+            url += ("&" if "?" in url else "?") + "sslmode=require"
+        return psycopg.connect(url, row_factory=dict_row)
+
+    class PgCursor:
+        def __init__(self, cur, lastrowid=None):
+            self._cur = cur
+            self.lastrowid = lastrowid
+        def fetchone(self):
+            return self._cur.fetchone()
+        def fetchall(self):
+            return self._cur.fetchall()
+
+    class PgDb:
+        def __init__(self, conn):
+            self.conn = conn
+        def execute(self, sql, params=()):
+            psql = sql.replace("?", "%s")
+            cur = self.conn.cursor()
+            lastrowid = None
+            if psql.lstrip().upper().startswith("INSERT"):
+                psql += " RETURNING id"
+                cur.execute(psql, tuple(params))
+                row = cur.fetchone()
+                lastrowid = row["id"] if row else None
+            else:
+                cur.execute(psql, tuple(params))
+            return PgCursor(cur, lastrowid)
+        def commit(self):
+            self.conn.commit()
+        def close(self):
+            self.conn.close()
+
+    def get_db():
+        if "db" not in g:
+            g.db = PgDb(_pg_connect())
+        return g.db
+
+    def init_db():
+        statements = [
+            "CREATE TABLE IF NOT EXISTS empenhos ("
+            " id SERIAL PRIMARY KEY,"
+            " ne TEXT, processo TEXT, nome_credor TEXT, criado_em TEXT)",
+            "CREATE TABLE IF NOT EXISTS itens ("
+            " id SERIAL PRIMARY KEY,"
+            " empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,"
+            " numero_item TEXT, descricao TEXT, und TEXT, frn TEXT,"
+            " qtde_empenhada DOUBLE PRECISION DEFAULT 0,"
+            " valor_unitario DOUBLE PRECISION DEFAULT 0,"
+            " valor_total DOUBLE PRECISION DEFAULT 0,"
+            " criado_em TEXT)",
+            "CREATE INDEX IF NOT EXISTS idx_itens_empenho ON itens(empenho_id)",
+            "CREATE TABLE IF NOT EXISTS pedidos ("
+            " id SERIAL PRIMARY KEY,"
+            " empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,"
+            " numero_pedido TEXT, data_pedido TEXT, observacoes TEXT, criado_em TEXT)",
+            "CREATE INDEX IF NOT EXISTS idx_pedidos_empenho ON pedidos(empenho_id)",
+            "CREATE TABLE IF NOT EXISTS pedido_itens ("
+            " id SERIAL PRIMARY KEY,"
+            " pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,"
+            " item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,"
+            " qtde_pedida DOUBLE PRECISION DEFAULT 0)",
+            "CREATE INDEX IF NOT EXISTS idx_pi_pedido ON pedido_itens(pedido_id)",
+            "CREATE INDEX IF NOT EXISTS idx_pi_item ON pedido_itens(item_id)",
+            "CREATE TABLE IF NOT EXISTS recebimentos ("
+            " id SERIAL PRIMARY KEY,"
+            " empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,"
+            " pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,"
+            " item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,"
+            " nf TEXT, data_recebimento TEXT,"
+            " qtde_recebida DOUBLE PRECISION DEFAULT 0,"
+            " observacoes TEXT, criado_em TEXT)",
+            "CREATE INDEX IF NOT EXISTS idx_rec_item ON recebimentos(item_id)",
+            "CREATE INDEX IF NOT EXISTS idx_rec_pedido ON recebimentos(pedido_id)",
+        ]
+        con = _pg_connect()
+        try:
+            for s in statements:
+                con.execute(s)
+            con.commit()
+        finally:
+            con.close()
+else:
+    import sqlite3
+
+    def get_db():
+        if "db" not in g:
+            g.db = sqlite3.connect(DB_PATH)
+            g.db.row_factory = sqlite3.Row
+            g.db.execute("PRAGMA foreign_keys = ON")
+        return g.db
+
+    def init_db():
+        con = sqlite3.connect(DB_PATH)
+        con.executescript(
+            """
+            -- ===================== SISTEMA DE EMPENHOS (itens/pedidos/recebimentos) =====================
+            CREATE TABLE IF NOT EXISTS empenhos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ne TEXT,
+                processo TEXT,
+                nome_credor TEXT,
+                criado_em TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS itens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
+                numero_item TEXT,
+                descricao TEXT,
+                und TEXT,
+                frn TEXT,
+                qtde_empenhada REAL DEFAULT 0,
+                valor_unitario REAL DEFAULT 0,
+                valor_total REAL DEFAULT 0,
+                criado_em TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_itens_empenho ON itens(empenho_id);
+
+            CREATE TABLE IF NOT EXISTS pedidos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
+                numero_pedido TEXT,
+                data_pedido TEXT,
+                observacoes TEXT,
+                criado_em TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_pedidos_empenho ON pedidos(empenho_id);
+
+            CREATE TABLE IF NOT EXISTS pedido_itens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+                item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
+                qtde_pedida REAL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_pi_pedido ON pedido_itens(pedido_id);
+            CREATE INDEX IF NOT EXISTS idx_pi_item ON pedido_itens(item_id);
+
+            -- RECEBIMENTOS: baixa física (saldo do item) + financeiro (NF)
+            CREATE TABLE IF NOT EXISTS recebimentos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
+                pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+                item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
+                nf TEXT,
+                data_recebimento TEXT,
+                qtde_recebida REAL DEFAULT 0,
+                observacoes TEXT,
+                criado_em TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_rec_item ON recebimentos(item_id);
+            CREATE INDEX IF NOT EXISTS idx_rec_pedido ON recebimentos(pedido_id);
+            """
+        )
+        con.commit()
+        con.close()
 
 
 @app.teardown_appcontext
@@ -23,72 +188,6 @@ def close_db(exc):
     db = g.pop("db", None)
     if db is not None:
         db.close()
-
-
-def init_db():
-    con = sqlite3.connect(DB_PATH)
-    con.executescript(
-        """
-        -- ===================== SISTEMA DE EMPENHOS (itens/pedidos/recebimentos) =====================
-        CREATE TABLE IF NOT EXISTS empenhos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ne TEXT,
-            processo TEXT,
-            nome_credor TEXT,
-            criado_em TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS itens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
-            numero_item TEXT,
-            descricao TEXT,
-            und TEXT,
-            frn TEXT,
-            qtde_empenhada REAL DEFAULT 0,
-            valor_unitario REAL DEFAULT 0,
-            valor_total REAL DEFAULT 0,
-            criado_em TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_itens_empenho ON itens(empenho_id);
-
-        CREATE TABLE IF NOT EXISTS pedidos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
-            numero_pedido TEXT,
-            data_pedido TEXT,
-            observacoes TEXT,
-            criado_em TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_pedidos_empenho ON pedidos(empenho_id);
-
-        CREATE TABLE IF NOT EXISTS pedido_itens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
-            item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
-            qtde_pedida REAL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_pi_pedido ON pedido_itens(pedido_id);
-        CREATE INDEX IF NOT EXISTS idx_pi_item ON pedido_itens(item_id);
-
-        -- RECEBIMENTOS: baixa física (saldo do item) + financeiro (NF)
-        CREATE TABLE IF NOT EXISTS recebimentos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
-            pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
-            item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
-            nf TEXT,
-            data_recebimento TEXT,
-            qtde_recebida REAL DEFAULT 0,
-            observacoes TEXT,
-            criado_em TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_rec_item ON recebimentos(item_id);
-        CREATE INDEX IF NOT EXISTS idx_rec_pedido ON recebimentos(pedido_id);
-        """
-    )
-    con.commit()
-    con.close()
 
 
 def parse_money(v):
@@ -462,7 +561,6 @@ def api_detalhe_pedido(pid):
 def api_pedido_pdf(pid):
     """Gera um PDF do pedido para envio ao fornecedor."""
     from fpdf import FPDF
-    import os as _os
 
     def norm(txt):
         """Limpa apenas caracteres de controle; mantém acentos (fonte TTF)."""
@@ -489,10 +587,8 @@ def api_pedido_pdf(pid):
 
     valor_total = sum(float(i["valor_total"]) for i in itens)
 
-    FONT = r"C:\Windows\Fonts\arial.ttf"
-    if not _os.path.exists(FONT):
-        FONT = r"C:\Windows\Fonts\Arial.ttf"
-    FONT_BLACK = r"C:\Windows\Fonts\ariblk.ttf"
+    FONT = os.path.join(BASE_DIR, "static", "fonts", "DejaVuSans.ttf")
+    FONT_BLACK = os.path.join(BASE_DIR, "static", "fonts", "DejaVuSans-Bold.ttf")
 
     class PedidoPDF(FPDF):
         def __init__(self, *args, **kwargs):
@@ -760,6 +856,16 @@ def api_stats_empenhos():
         "percentual_concluidos": round((empenhos_concluidos / tot * 100), 2) if tot else 0,
         "status_pedidos": status_pedidos,
     })
+
+
+# Cria o schema no Postgres automaticamente ao subir no Vercel
+# (o __main__ não roda lá; o app é importado pelo runtime).
+if USE_POSTGRES:
+    try:
+        init_db()
+    except Exception as e:
+        import sys
+        print("init_db PostgreSQL falhou:", e, file=sys.stderr)
 
 
 if __name__ == "__main__":
