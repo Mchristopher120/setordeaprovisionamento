@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Aprovisionamento</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <span class="logo">⚙</span>
+            <div>
+                <h1>Aprovisionamento</h1>
+                <p class="sub">Gestão de Empenhos &amp; Liquidações</p>
+            </div>
+        </div>
+        <div class="topbar-actions">
+            <a href="/empenhos" class="btn btn-ghost" title="Cadastrar empenhos, itens, pedidos e recebimentos">📦 Empenhos</a>
+            <button id="btnRefresh" class="btn btn-ghost" title="Atualizar dados">⟳ Atualizar</button>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="kpis" id="kpis"></section>
+
+        <section class="indicadores">
+            <h3 class="section-title">Indicadores de Execução</h3>
+            <div class="ind-grid" id="indGrid"></div>
+        </section>
+
+        <section class="card table-card">
+            <div class="table-head">
+                <h3>Empenhos</h3>
+                <span class="count-badge" id="countBadge">0 empenhos</span>
+            </div>
+            <div class="table-wrap">
+                <table id="dataTable">
+                    <thead>
+                        <tr>
+                            <th>NE</th>
+                            <th>Credor</th>
+                            <th>Processo</th>
+                            <th>Empenhado</th>
+                            <th>Pago</th>
+                            <th>A Liquidar</th>
+                            <th>% Pago</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

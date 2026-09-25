@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Empenhos - Aprovisionamento</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <span class="logo">📦</span>
+            <div>
+                <h1>Empenhos, Pedidos &amp; Recebimentos</h1>
+                <p class="sub">Cadastro por item • Saldo físico • Recebimentos (NF)</p>
+            </div>
+        </div>
+        <div class="topbar-actions">
+            <a href="/" class="btn btn-ghost" title="Voltar ao dashboard">📊 Dashboard</a>
+            <button id="btnNew" class="btn btn-primary">＋ Novo Empenho</button>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- KPIs do módulo -->
+        <section class="kpis" id="kpis"></section>
+
+        <!-- LISTA DE EMPENHOS -->
+        <section class="card table-card" id="secLista">
+            <div class="table-head">
+                <h3>Empenhos</h3>
+                <span class="count-badge" id="countBadge">0 empenhos</span>
+            </div>
+            <div class="table-wrap">
+                <table id="tblEmpenhos">
+                    <thead>
+                        <tr>
+                            <th>NE</th>
+                            <th>Credor</th>
+                            <th>Processo</th>
+                            <th>Valor Empenhado</th>
+                            <th>Pago</th>
+                            <th>A Liquidar</th>
+                            <th>% Pago</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbodyEmpenhos"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- DETALHE DO EMPENHO -->
+        <section class="card" id="secDetalhe" style="display:none">
+            <div class="table-head">
+                <h3 id="detTitulo">Detalhe do Empenho</h3>
+                <div class="topbar-actions">
+                    <button id="btnVoltar" class="btn btn-ghost">← Voltar</button>
+                    <button id="btnExcluirEmpenho" class="btn btn-danger">🗑 Apagar Empenho</button>
+                    <button id="btnAddItem" class="btn btn-primary">＋ Incluir Itens</button>
+                    <button id="btnNovoPedido" class="btn btn-primary">＋ Fazer Pedido</button>
+                </div>
+            </div>
+
+            <!-- Itens -->
+            <h4>Itens do Empenho</h4>
+            <div class="table-wrap">
+                <table id="tblItens">
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th>Descrição</th>
+                            <th>Und</th>
+                            <th>Qtde Empenhada</th>
+                            <th>Valor Unit.</th>
+                            <th>Valor Total</th>
+                            <th>Recebido</th>
+                            <th>Saldo Físico</th>
+                            <th>Pago</th>
+                            <th>A Liquidar</th>
+                            <th>%</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbodyItens"></tbody>
+                </table>
+            </div>
+
+            <!-- Pedidos -->
+            <h4 style="margin-top:20px">Pedidos</h4>
+            <div class="table-wrap">
+                <table id="tblPedidos">
+                    <thead>
+                        <tr>
+                            <th>Pedido</th>
+                            <th>Data</th>
+                            <th>Itens</th>
+                            <th>Qtde Pedida</th>
+                            <th>Qtde Recebida</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbodyPedidos"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <!-- MODAL NOVO EMPENHO -->
+    <div class="modal" id="modalEmpenho">
+        <div class="modal-box">
+            <h3>Novo Empenho</h3>
+            <div class="modal-body">
+                <label>NE (Nota de Empenho) *</label>
+                <input type="text" id="mNe" placeholder="ex: 2026NE000012">
+                <label>Processo</label>
+                <input type="text" id="mProcesso" placeholder="Nº do processo (opcional)">
+                <label>Credor *</label>
+                <input type="text" id="mCredor" placeholder="Nome do fornecedor">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" data-close>Cancelar</button>
+                <button id="btnSalvarEmpenho" class="btn btn-primary">Salvar Empenho</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL ITENS (tabelinha: vários itens na mesma inclusão) -->
+    <div class="modal" id="modalItem">
+        <div class="modal-box modal-large">
+            <h3 id="itemModalTitulo">Incluir Itens</h3>
+            <div class="modal-body">
+                <div id="itemTableWrap" class="table-wrap">
+                    <table id="tblItemEdit">
+                        <thead>
+                            <tr>
+                                <th style="width:70px">Item nº</th>
+                                <th>Descrição *</th>
+                                <th style="width:80px">Und</th>
+                                <th style="width:110px">Qtde</th>
+                                <th style="width:120px">Valor Unit. (R$)</th>
+                                <th style="width:40px"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="tbodyItemEdit"></tbody>
+                    </table>
+                </div>
+                <button id="btnAddLinha" class="btn btn-ghost" style="align-self:flex-start">＋ Adicionar linha</button>
+                <div id="itemTotalBox" class="item-total">Total: <strong id="itemTotal">R$ 0,00</strong></div>
+                <p class="muted" id="itemEditHint" style="font-size:12px">Preencha cada linha e clique em Salvar. Itens em branco são ignorados.</p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" data-close>Cancelar</button>
+                <button id="btnSalvarItem" class="btn btn-primary">Salvar Itens</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL PEDIDO -->
+    <div class="modal" id="modalPedido">
+        <div class="modal-box modal-large">
+            <h3>Novo Pedido</h3>
+            <div class="modal-body">
+                <label>Nº do Pedido *</label>
+                <input type="text" id="mPedNum" placeholder="ex: PED-001">
+                <label>Data solicitada</label>
+                <input type="date" id="mPedData">
+                <label>Observações</label>
+                <input type="text" id="mPedObs" placeholder="ex: pedido parcial (09/09)">
+                <label>Itens solicitados</label>
+                <div id="mPedItens"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" data-close>Cancelar</button>
+                <button id="btnSalvarPedido" class="btn btn-primary">Salvar Pedido</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL RECEBER -->
+    <div class="modal" id="modalReceber">
+        <div class="modal-box modal-large">
+            <h3>Registrar Recebimento</h3>
+            <div class="modal-body">
+                <label>Pedido</label>
+                <p class="muted" id="rPedInfo" style="margin-bottom:8px"></p>
+                <label>NF (número da nota) *</label>
+                <input type="text" id="rNf" placeholder="ex: 12345">
+                <label>Data do recebimento</label>
+                <input type="date" id="rData">
+                <label>Quantidades recebidas</label>
+                <div id="rItens"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" data-close>Cancelar</button>
+                <button id="btnSalvarRecebimento" class="btn btn-primary">Registrar Recebimento</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL VER NFs -->
+    <div class="modal" id="modalNfs">
+        <div class="modal-box modal-large">
+            <h3>Notas Fiscais</h3>
+            <p class="muted" id="nfPedidoInfo" style="margin-bottom:12px"></p>
+            <div id="nfCorpo" class="nf-list"></div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" data-close>Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="{{ url_for('static', filename='empenhos.js') }}"></script>
+</body>
+</html>
