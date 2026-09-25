@@ -6,7 +6,12 @@ from flask import Flask, render_template, request, jsonify, g
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "aprov.db")
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DATABASE_URL = (
+    os.environ.get("DATABASE_URL", "")
+    or os.environ.get("POSTGRES_URL", "")
+    or os.environ.get("DATABASE_POSTGRES_URL", "")
+    or os.environ.get("NEON_URL", "")
+).strip()
 USE_POSTGRES = DATABASE_URL.startswith("postgres") or DATABASE_URL.startswith("postgresql")
 
 app = Flask(__name__)
