@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, g
 
@@ -32,7 +33,18 @@ if USE_POSTGRES:
         url = DATABASE_URL
         if "sslmode" not in url:
             url += ("&" if "?" in url else "?") + "sslmode=require"
-        return psycopg.connect(url, row_factory=dict_row)
+        if "connect_timeout" not in url:
+            url += ("&" if "?" in url else "?") + "connect_timeout=5"
+        # Neon grátis "dorme" após ~5 min ocioso; o primeiro acesso acorda o
+        # banco (cold start). Tenta de novo até 4x para absorver o wake-up.
+        for tentativa in range(4):
+            try:
+                return psycopg.connect(url, row_factory=dict_row)
+            except Exception:
+                if tentativa == 3:
+                    raise
+                time.sleep(1 + tentativa)
+        return None  # nunca alcançado; mantém o linter satisfeito
 
     class PgCursor:
         def __init__(self, cur, lastrowid=None):
@@ -186,6 +198,18 @@ else:
         )
         con.commit()
         con.close()
+
+
+@app.errorhandler(500)
+def erro_500(e):
+    """Banco da Neon pode estar 'dormindo' (grátis: dorme após 5 min sem uso).
+    Devolve um JSON amigável para a API em vez de página HTML crua."""
+    if request.path.startswith("/api/"):
+        return jsonify({
+            "erro": "banco_dormindo",
+            "mensagem": "O banco de dados estava dormindo e acordou agora. Recarregue a página em alguns segundos.",
+        }), 500
+    return render_template("index.html"), 500
 
 
 @app.teardown_appcontext
