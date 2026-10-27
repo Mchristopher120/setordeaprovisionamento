@@ -22,11 +22,46 @@
     </header>
 
     <main class="container">
+        <div id="erroBox" class="alert-error" hidden>
+            <div>
+                <strong>Não foi possível carregar os dados.</strong>
+                <span id="erroMsg"></span>
+            </div>
+            <button id="btnTentar" class="btn btn-sm btn-primary">Tentar novamente</button>
+        </div>
+
         <section class="kpis" id="kpis"></section>
 
         <section class="indicadores">
             <h3 class="section-title">Indicadores de Execução</h3>
             <div class="ind-grid" id="indGrid"></div>
+        </section>
+
+        <section class="charts-grid">
+            <div class="card">
+                <div class="card-title">Status dos Pedidos</div>
+                <div class="card-sub">Quantos pedidos estão aguardando, parciais ou entregues</div>
+                <div id="chartStatus" class="chart-box"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">Credores com Maior Saldo a Liquidar</div>
+                <div class="card-sub">Top 5 por valor ainda não pago</div>
+                <div id="chartCredores" class="chart-box"></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="chart-head">
+                <div>
+                    <div class="card-title">Empenhado × Pago por Empenho</div>
+                    <div class="card-sub">Os 8 maiores empenhos — a barra cheia é o valor empenhado; a parte colorida, o que já foi pago</div>
+                </div>
+                <div class="legend">
+                    <span><i style="background:var(--track)"></i>Empenhado</span>
+                    <span><i style="background:var(--green)"></i>Pago</span>
+                </div>
+            </div>
+            <div id="chartEmpenhos"></div>
         </section>
 
         <section class="card table-card">
@@ -38,13 +73,13 @@
                 <table id="dataTable">
                     <thead>
                         <tr>
-                            <th>NE</th>
-                            <th>Credor</th>
-                            <th>Processo</th>
-                            <th>Empenhado</th>
-                            <th>Pago</th>
-                            <th>A Liquidar</th>
-                            <th>% Pago</th>
+                            <th data-key="ne">NE</th>
+                            <th data-key="nome_credor">Credor</th>
+                            <th data-key="processo">Processo</th>
+                            <th data-key="valor_empenhado" data-default="desc">Empenhado</th>
+                            <th data-key="valor_pago" data-default="desc">Pago</th>
+                            <th data-key="a_liquidar" data-default="desc">A Liquidar</th>
+                            <th data-key="percentual_pago" data-default="desc">% Pago</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -54,8 +89,10 @@
         </section>
     </main>
 
-    <div id="toast" class="toast"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+    <script src="{{ url_for('static', filename='ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='charts.js') }}"></script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

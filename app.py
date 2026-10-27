@@ -286,6 +286,60 @@ def item_sumario(item):
     return d
 
 
+EPS = 1e-9  # tolerância para comparar quantidades em ponto flutuante
+
+
+def nome_item(item):
+    """'Item 3 (LARANJA)' ou só 'LARANJA' quando o item não tem número."""
+    num = (item["numero_item"] or "").strip()
+    return f"Item {num} ({item['descricao']})" if num else str(item["descricao"])
+
+
+def resumo_pedidos(db, empenho_id=None, pedido_id=None):
+    """Calcula, por pedido, a qtde pedida/recebida e o STATUS.
+
+    Regra única usada em todas as telas (antes cada tela calculava de um jeito):
+      * Só contam recebimentos de itens que fazem parte do pedido.
+      * RECEBIDO -> todos os itens do pedido chegaram por completo.
+      * PARCIAL  -> algum item já chegou (total ou parcialmente), mas não todos.
+      * INCLUIDO -> nada recebido ainda.
+    Retorna {pedido_id: {"pedida", "recebida", "status", "itens": {item_id: {...}}}}
+    """
+    filtro, params = "", []
+    if pedido_id is not None:
+        filtro, params = " WHERE pi.pedido_id = ?", [pedido_id]
+    elif empenho_id is not None:
+        filtro, params = " JOIN pedidos p ON p.id = pi.pedido_id WHERE p.empenho_id = ?", [empenho_id]
+    rows = db.execute(
+        "SELECT pi.pedido_id, pi.item_id, SUM(pi.qtde_pedida) as pedida,"
+        " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r"
+        "   WHERE r.pedido_id = pi.pedido_id AND r.item_id = pi.item_id) as recebida"
+        " FROM pedido_itens pi" + filtro +
+        " GROUP BY pi.pedido_id, pi.item_id",
+        tuple(params),
+    ).fetchall()
+
+    out = {}
+    for r in rows:
+        p = out.setdefault(r["pedido_id"], {"pedida": 0.0, "recebida": 0.0, "itens": {}})
+        pedida = float(r["pedida"] or 0)
+        recebida = float(r["recebida"] or 0)
+        p["itens"][r["item_id"]] = {"pedida": pedida, "recebida": recebida}
+        p["pedida"] += pedida
+        # Recebido a mais num item não "compensa" outro item ainda pendente
+        p["recebida"] += min(recebida, pedida)
+
+    for p in out.values():
+        itens = [i for i in p["itens"].values() if i["pedida"] > 0]
+        if itens and all(i["recebida"] + EPS >= i["pedida"] for i in itens):
+            p["status"] = "RECEBIDO"
+        elif any(i["recebida"] > 0 for i in itens):
+            p["status"] = "PARCIAL"
+        else:
+            p["status"] = "INCLUIDO"
+    return out
+
+
 @app.route("/empenhos")
 def pag_empenhos():
     return render_template("empenhos.html")
@@ -307,7 +361,7 @@ def api_lista_empenhos():
         d = dict(r)
         d["valor_empenhado"] = d["valor_empenhado"] or 0
         d["valor_pago"] = d["valor_pago"] or 0
-        d["a_liquidar"] = d["valor_empenhado"] - d["valor_pago"]
+        d["a_liquidar"] = max(0, d["valor_empenhado"] - d["valor_pago"])
         d["percentual_pago"] = round(
             (d["valor_pago"] / (d["valor_empenhado"] or 1) * 100), 2
         )
@@ -347,19 +401,19 @@ def api_detalhe_empenho(eid):
     pedidos = db.execute(
         "SELECT p.*,"
         " (SELECT COUNT(*) FROM pedido_itens pi WHERE pi.pedido_id = p.id) as qt_itens,"
-        " (SELECT COALESCE(SUM(pi.qtde_pedida),0) FROM pedido_itens pi WHERE pi.pedido_id = p.id) as qtde_total_pedida,"
-        " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.pedido_id = p.id) as qtde_total_recebida,"
         " (SELECT COUNT(*) FROM recebimentos r WHERE r.pedido_id = p.id) as qt_recebimentos"
         " FROM pedidos p WHERE p.empenho_id = ? ORDER BY p.id DESC",
         (eid,),
     ).fetchall()
+    resumo = resumo_pedidos(db, empenho_id=eid)
 
     pedido_lista = []
     for p in pedidos:
         pd = dict(p)
-        pd["status"] = "RECEBIDO" if pd["qtde_total_recebida"] >= pd["qtde_total_pedida"] and pd["qtde_total_pedida"] > 0 else "INCLUIDO"
-        if pd["qt_recebimentos"] and pd["qtde_total_recebida"] < pd["qtde_total_pedida"]:
-            pd["status"] = "PARCIAL"
+        rs = resumo.get(pd["id"], {"pedida": 0, "recebida": 0, "status": "INCLUIDO"})
+        pd["qtde_total_pedida"] = rs["pedida"]
+        pd["qtde_total_recebida"] = rs["recebida"]
+        pd["status"] = rs["status"]
         pedido_lista.append(pd)
 
     return jsonify({
@@ -506,6 +560,22 @@ def api_criar_pedido():
         return jsonify({"ok": False, "error": "Informe pelo menos um item com quantidade pedida"}), 400
 
     db = get_db()
+    # Não deixa pedir mais do que o saldo físico do item (nem item de outro empenho)
+    for it in itens:
+        qtde = float(it.get("qtde_pedida") or 0)
+        if qtde <= 0:
+            continue
+        item = db.execute(
+            "SELECT i.*, (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id) as recebida"
+            " FROM itens i WHERE i.id = ? AND i.empenho_id = ?",
+            (it.get("item_id"), empenho_id),
+        ).fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "Item não pertence a este empenho"}), 400
+        saldo = max(0, float(item["qtde_empenhada"] or 0) - float(item["recebida"] or 0))
+        if qtde > saldo + EPS:
+            return jsonify({"ok": False, "error": f"{nome_item(item)}: pedido de {qtde:g} maior que o saldo de {saldo:g}"}), 400
+
     cur = db.execute(
         "INSERT INTO pedidos (empenho_id, numero_pedido, data_pedido, observacoes, criado_em)"
         " VALUES (?,?,?,?,?)",
@@ -567,18 +637,29 @@ def api_detalhe_pedido(pid):
         else:
             existente["itens"].append(item)
 
-    qtde_total_pedida = sum(float(i["qtde_pedida"]) for i in itens_pedido)
-    qtde_total_recebida = sum(float(i["qtde_recebida"]) for i in itens_pedido)
+    rs = resumo_pedidos(db, pedido_id=pid).get(pid, {"pedida": 0, "recebida": 0, "status": "INCLUIDO"})
+    qtde_total_pedida = rs["pedida"]
+    qtde_total_recebida = rs["recebida"]
+    status = rs["status"]
 
-    status = "RECEBIDO" if qtde_total_recebida >= qtde_total_pedida and qtde_total_pedida > 0 else "INCLUIDO"
-    if recebimentos and qtde_total_recebida < qtde_total_pedida:
-        status = "PARCIAL"
+    # Saldo físico atual de cada item (para limitar o recebimento na tela)
+    itens_saida = []
+    for i in itens_pedido:
+        d = dict(i)
+        tot = db.execute(
+            "SELECT COALESCE(SUM(qtde_recebida),0) as v FROM recebimentos WHERE item_id = ?",
+            (d["item_id"],),
+        ).fetchone()["v"]
+        emp = db.execute("SELECT qtde_empenhada FROM itens WHERE id = ?", (d["item_id"],)).fetchone()
+        d["saldo_fisico"] = max(0, float(emp["qtde_empenhada"] or 0) - float(tot or 0))
+        d["pendente"] = max(0, min(float(d["qtde_pedida"] or 0) - float(d["qtde_recebida"] or 0), d["saldo_fisico"]))
+        itens_saida.append(d)
 
     return jsonify({
         "ok": True,
         "pedido": dict(pedido),
         "empenho": dict(empenho) if empenho else None,
-        "itens": [dict(i) for i in itens_pedido],
+        "itens": itens_saida,
         "recebimentos": recebimentos,
         "qtde_total_pedida": qtde_total_pedida,
         "qtde_total_recebida": qtde_total_recebida,
@@ -781,20 +862,42 @@ def api_receber_pedido(pid):
     pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
     if not pedido:
         return jsonify({"ok": False, "error": "Pedido não encontrado"}), 404
+    if not nf:
+        return jsonify({"ok": False, "error": "Informe o número da NF"}), 400
     if not itens or not any(float(i.get("qtde_recebida") or 0) > 0 for i in itens):
         return jsonify({"ok": False, "error": "Informe ao menos uma quantidade recebida"}), 400
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    total_recebido = 0
+    # Valida TUDO antes de gravar: só itens do pedido e sem passar do pendente
+    resumo = resumo_pedidos(db, pedido_id=pid).get(pid, {"itens": {}})
+    validos = []
     for it in itens:
         item_id = it.get("item_id")
         qtde = float(it.get("qtde_recebida") or 0)
         if qtde <= 0 or not item_id:
             continue
+        item_id = int(item_id)
+        no_pedido = resumo["itens"].get(item_id)
+        item = db.execute(
+            "SELECT i.*, (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id) as recebida"
+            " FROM itens i WHERE i.id = ?",
+            (item_id,),
+        ).fetchone()
+        nome = nome_item(item) if item else "Item"
+        if not item or not no_pedido:
+            return jsonify({"ok": False, "error": f"{nome} não faz parte deste pedido"}), 400
+        saldo = max(0, float(item["qtde_empenhada"] or 0) - float(item["recebida"] or 0))
+        pendente = max(0, min(no_pedido["pedida"] - no_pedido["recebida"], saldo))
+        if qtde > pendente + EPS:
+            return jsonify({"ok": False, "error": f"{nome}: recebendo {qtde:g}, mas só faltam {pendente:g} neste pedido"}), 400
+        validos.append((item_id, qtde, it.get("observacoes") or ""))
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total_recebido = 0
+    for item_id, qtde, obs in validos:
         db.execute(
             "INSERT INTO recebimentos (empenho_id, pedido_id, item_id, nf, data_recebimento, qtde_recebida, observacoes, criado_em)"
             " VALUES (?,?,?,?,?,?,?,?)",
-            (pedido["empenho_id"], pid, item_id, nf, data_rec, qtde, it.get("observacoes") or "", now),
+            (pedido["empenho_id"], pid, item_id, nf, data_rec, qtde, obs, now),
         )
         total_recebido += qtde
 
@@ -835,38 +938,36 @@ def api_stats_empenhos():
         "     >= i.qtde_empenhada"
     ).fetchone()["qtd"]
 
-    # Empenhos concluídos (todos os itens com saldo físico zerado / sem itens pendentes)
+    # Execução física: média do % recebido de cada item (limitado a 100%).
+    # Antes somava unidades diferentes (CX + KG + UN), o que não tinha significado.
+    fis = db.execute(
+        "SELECT i.qtde_empenhada as emp,"
+        " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id) as rec"
+        " FROM itens i WHERE i.qtde_empenhada > 0"
+    ).fetchall()
+    itens_com_qtde = len(fis)
+    percentual_fisico = (
+        round(sum(min(1.0, float(f["rec"]) / float(f["emp"])) for f in fis) / itens_com_qtde * 100, 2)
+        if itens_com_qtde else 0
+    )
+
+    # Empenhos concluídos: têm ao menos 1 item e todos foram recebidos por completo
+    # (antes, um empenho sem itens contava como concluído)
     empenhos_concluidos = db.execute(
         "SELECT COUNT(*) as qtd FROM empenhos e WHERE"
-        " NOT EXISTS (SELECT 1 FROM itens i WHERE i.empenho_id = e.id"
+        " EXISTS (SELECT 1 FROM itens i0 WHERE i0.empenho_id = e.id AND i0.qtde_empenhada > 0)"
+        " AND NOT EXISTS (SELECT 1 FROM itens i WHERE i.empenho_id = e.id"
         "   AND i.qtde_empenhada > 0"
         "   AND (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id)"
         "       < i.qtde_empenhada)"
     ).fetchone()["qtd"]
 
-    aberto = db.execute(
-        "SELECT COUNT(DISTINCT p.id) as qtd FROM pedidos p"
-        " LEFT JOIN recebimentos r ON r.pedido_id = p.id"
-        " WHERE (SELECT COALESCE(SUM(r2.qtde_recebida),0) FROM recebimentos r2 WHERE r2.pedido_id = p.id)"
-        "      < (SELECT COALESCE(SUM(pi.qtde_pedida),0) FROM pedido_itens pi WHERE pi.pedido_id = p.id)"
-    ).fetchone()["qtd"]
-
+    # Mesma regra de status usada nas telas de empenho e de pedido
     status_pedidos = {"INCLUIDO": 0, "PARCIAL": 0, "RECEBIDO": 0}
-    rows = db.execute(
-        "SELECT p.id,"
-        " (SELECT COALESCE(SUM(pi.qtde_pedida),0) FROM pedido_itens pi WHERE pi.pedido_id = p.id) as pedida,"
-        " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.pedido_id = p.id) as recebida"
-        " FROM pedidos p"
-    ).fetchall()
-    for r in rows:
-        if r["pedida"] <= 0:
-            continue
-        if r["recebida"] >= r["pedida"]:
-            status_pedidos["RECEBIDO"] += 1
-        elif r["recebida"] > 0:
-            status_pedidos["PARCIAL"] += 1
-        else:
-            status_pedidos["INCLUIDO"] += 1
+    for p in resumo_pedidos(db).values():
+        if p["pedida"] > 0:
+            status_pedidos[p["status"]] += 1
+    aberto = status_pedidos["INCLUIDO"] + status_pedidos["PARCIAL"]
 
     return jsonify({
         "empenhos": tot, "itens": itens, "pedidos": pedidos,
@@ -877,7 +978,8 @@ def api_stats_empenhos():
         "percentual_pago": round((pago / empenhado * 100), 2) if empenhado else 0,
         "qtde_empenhada_total": qtde_empenhada_total,
         "qtde_recebida_total": qtde_recebida_total,
-        "percentual_fisico": round((qtde_recebida_total / qtde_empenhada_total * 100), 2) if qtde_empenhada_total else 0,
+        "percentual_fisico": percentual_fisico,
+        "itens_com_qtde": itens_com_qtde,
         "itens_zerados": itens_zerados,
         "percentual_itens_zerados": round((itens_zerados / itens * 100), 2) if itens else 0,
         "empenhos_concluidos": empenhos_concluidos,

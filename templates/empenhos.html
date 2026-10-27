@@ -35,13 +35,13 @@
                 <table id="tblEmpenhos">
                     <thead>
                         <tr>
-                            <th>NE</th>
-                            <th>Credor</th>
-                            <th>Processo</th>
-                            <th>Valor Empenhado</th>
-                            <th>Pago</th>
-                            <th>A Liquidar</th>
-                            <th>% Pago</th>
+                            <th data-key="ne">NE</th>
+                            <th data-key="nome_credor">Credor</th>
+                            <th data-key="processo">Processo</th>
+                            <th data-key="valor_empenhado" data-default="desc">Valor Empenhado</th>
+                            <th data-key="valor_pago" data-default="desc">Pago</th>
+                            <th data-key="a_liquidar" data-default="desc">A Liquidar</th>
+                            <th data-key="percentual_pago" data-default="desc">% Pago</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -52,12 +52,15 @@
 
         <!-- DETALHE DO EMPENHO -->
         <section class="card" id="secDetalhe" style="display:none">
-            <div class="table-head">
-                <h3 id="detTitulo">Detalhe do Empenho</h3>
-                <div class="topbar-actions">
-                    <button id="btnVoltar" class="btn btn-ghost">← Voltar</button>
+            <div class="detail-head">
+                <div>
+                    <button id="btnVoltar" class="btn btn-link">← Voltar para a lista</button>
+                    <h3 id="detTitulo">Detalhe do Empenho</h3>
+                    <div id="detResumo" class="chips"></div>
+                </div>
+                <div class="detail-actions">
                     <button id="btnExcluirEmpenho" class="btn btn-danger">🗑 Apagar Empenho</button>
-                    <button id="btnAddItem" class="btn btn-primary">＋ Incluir Itens</button>
+                    <button id="btnAddItem" class="btn btn-secondary">＋ Incluir Itens</button>
                     <button id="btnNovoPedido" class="btn btn-primary">＋ Fazer Pedido</button>
                 </div>
             </div>
@@ -68,17 +71,17 @@
                 <table id="tblItens">
                     <thead>
                         <tr>
-                            <th>Item</th>
-                            <th>Descrição</th>
-                            <th>Und</th>
-                            <th>Qtde Empenhada</th>
-                            <th>Valor Unit.</th>
-                            <th>Valor Total</th>
-                            <th>Recebido</th>
-                            <th>Saldo Físico</th>
-                            <th>Pago</th>
-                            <th>A Liquidar</th>
-                            <th>%</th>
+                            <th data-key="numero_item">Item</th>
+                            <th data-key="descricao">Descrição</th>
+                            <th data-key="und">Und</th>
+                            <th data-key="qtde_empenhada" data-default="desc">Qtde Empenhada</th>
+                            <th data-key="valor_unitario" data-default="desc">Valor Unit.</th>
+                            <th data-key="valor_total" data-default="desc">Valor Total</th>
+                            <th data-key="qtde_recebida" data-default="desc">Recebido</th>
+                            <th data-key="saldo_fisico" data-default="desc">Saldo Físico</th>
+                            <th data-key="pago" data-default="desc">Pago</th>
+                            <th data-key="a_liquidar" data-default="desc">A Liquidar</th>
+                            <th data-key="percentual_pago" data-default="desc">% Pago</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -87,17 +90,17 @@
             </div>
 
             <!-- Pedidos -->
-            <h4 style="margin-top:20px">Pedidos</h4>
+            <h4 class="mt-section">Pedidos</h4>
             <div class="table-wrap">
                 <table id="tblPedidos">
                     <thead>
                         <tr>
-                            <th>Pedido</th>
-                            <th>Data</th>
-                            <th>Itens</th>
-                            <th>Qtde Pedida</th>
-                            <th>Qtde Recebida</th>
-                            <th>Status</th>
+                            <th data-key="numero_pedido">Pedido</th>
+                            <th data-key="data_pedido" data-default="desc">Data</th>
+                            <th data-key="qt_itens" data-default="desc">Itens</th>
+                            <th data-key="qtde_total_pedida" data-default="desc">Qtde Pedida</th>
+                            <th data-key="qtde_total_recebida" data-default="desc">Qtde Recebida</th>
+                            <th data-key="status">Status</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -109,7 +112,7 @@
 
     <!-- MODAL NOVO EMPENHO -->
     <div class="modal" id="modalEmpenho">
-        <div class="modal-box">
+        <div role="dialog" aria-modal="true" class="modal-box">
             <h3>Novo Empenho</h3>
             <div class="modal-body">
                 <label>NE (Nota de Empenho) *</label>
@@ -120,7 +123,7 @@
                 <input type="text" id="mCredor" placeholder="Nome do fornecedor">
             </div>
             <div class="modal-actions">
-                <button class="btn btn-ghost" data-close>Cancelar</button>
+                <button class="btn btn-secondary" data-close>Cancelar</button>
                 <button id="btnSalvarEmpenho" class="btn btn-primary">Salvar Empenho</button>
             </div>
         </div>
@@ -128,7 +131,7 @@
 
     <!-- MODAL ITENS (tabelinha: vários itens na mesma inclusão) -->
     <div class="modal" id="modalItem">
-        <div class="modal-box modal-large">
+        <div role="dialog" aria-modal="true" class="modal-box modal-large">
             <h3 id="itemModalTitulo">Incluir Itens</h3>
             <div class="modal-body">
                 <div id="itemTableWrap" class="table-wrap">
@@ -146,12 +149,12 @@
                         <tbody id="tbodyItemEdit"></tbody>
                     </table>
                 </div>
-                <button id="btnAddLinha" class="btn btn-ghost" style="align-self:flex-start">＋ Adicionar linha</button>
+                <button id="btnAddLinha" class="btn btn-secondary btn-sm" style="align-self:flex-start">＋ Adicionar linha</button>
                 <div id="itemTotalBox" class="item-total">Total: <strong id="itemTotal">R$ 0,00</strong></div>
                 <p class="muted" id="itemEditHint" style="font-size:12px">Preencha cada linha e clique em Salvar. Itens em branco são ignorados.</p>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-ghost" data-close>Cancelar</button>
+                <button class="btn btn-secondary" data-close>Cancelar</button>
                 <button id="btnSalvarItem" class="btn btn-primary">Salvar Itens</button>
             </div>
         </div>
@@ -159,7 +162,7 @@
 
     <!-- MODAL PEDIDO -->
     <div class="modal" id="modalPedido">
-        <div class="modal-box modal-large">
+        <div role="dialog" aria-modal="true" class="modal-box modal-large">
             <h3>Novo Pedido</h3>
             <div class="modal-body">
                 <label>Nº do Pedido *</label>
@@ -168,11 +171,11 @@
                 <input type="date" id="mPedData">
                 <label>Observações</label>
                 <input type="text" id="mPedObs" placeholder="ex: pedido parcial (09/09)">
-                <label>Itens solicitados</label>
+                <label>Itens solicitados <span class="muted">(até o saldo de cada item)</span></label>
                 <div id="mPedItens"></div>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-ghost" data-close>Cancelar</button>
+                <button class="btn btn-secondary" data-close>Cancelar</button>
                 <button id="btnSalvarPedido" class="btn btn-primary">Salvar Pedido</button>
             </div>
         </div>
@@ -180,7 +183,7 @@
 
     <!-- MODAL RECEBER -->
     <div class="modal" id="modalReceber">
-        <div class="modal-box modal-large">
+        <div role="dialog" aria-modal="true" class="modal-box modal-large">
             <h3>Registrar Recebimento</h3>
             <div class="modal-body">
                 <label>Pedido</label>
@@ -193,7 +196,7 @@
                 <div id="rItens"></div>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-ghost" data-close>Cancelar</button>
+                <button class="btn btn-secondary" data-close>Cancelar</button>
                 <button id="btnSalvarRecebimento" class="btn btn-primary">Registrar Recebimento</button>
             </div>
         </div>
@@ -201,18 +204,19 @@
 
     <!-- MODAL VER NFs -->
     <div class="modal" id="modalNfs">
-        <div class="modal-box modal-large">
+        <div role="dialog" aria-modal="true" class="modal-box modal-large">
             <h3>Notas Fiscais</h3>
             <p class="muted" id="nfPedidoInfo" style="margin-bottom:12px"></p>
             <div id="nfCorpo" class="nf-list"></div>
             <div class="modal-actions">
-                <button class="btn btn-ghost" data-close>Fechar</button>
+                <button class="btn btn-secondary" data-close>Fechar</button>
             </div>
         </div>
     </div>
 
-    <div id="toast" class="toast"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+    <script src="{{ url_for('static', filename='ui.js') }}"></script>
     <script src="{{ url_for('static', filename='empenhos.js') }}"></script>
 </body>
 </html>
