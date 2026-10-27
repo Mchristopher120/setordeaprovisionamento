@@ -1,6 +1,6 @@
 # Dashboard de Aprovisionamento
 
-Sistema para gestão de **Notas de Empenho (NE)** por item, com acompanhamento de **pedidos**, **recebimentos (NF)** e **saldos** (físico e financeiro).
+Sistema para gestão de **Notas de Empenho (NE)** por item, com acompanhamento de **pedidos**, **recebimentos (NF / liquidação)**, **pagamentos (OB)** e **saldos** físico e financeiro.
 
 ## Requisitos
 - Python 3.10+
@@ -10,54 +10,64 @@ Sistema para gestão de **Notas de Empenho (NE)** por item, com acompanhamento d
 pip install -r requirements.txt
 ```
 
+## Senha de acesso
+O sistema usa **uma senha única do setor**. Ao entrar, cada pessoa informa o próprio nome, que fica registrado no **histórico de alterações**.
+
+| Variável | Obrigatória | Para quê |
+|---|---|---|
+| `APP_PASSWORD` | **Sim, em produção** | Senha do setor. Sem ela, o sistema no Vercel fica **bloqueado**. Localmente (SQLite) ele abre sem senha, com um aviso amarelo no topo. |
+| `SECRET_KEY` | Recomendada | Chave das sessões. Use um texto longo e aleatório. Sem ela, a chave é derivada da senha, e trocar a senha desconecta todo mundo. |
+| `DATABASE_URL` | Em produção | Conexão do PostgreSQL (Neon / Vercel Postgres). |
+
+Para usar senha localmente, antes de rodar: `set APP_PASSWORD=sua_senha` (Windows) ou `export APP_PASSWORD=sua_senha` (Linux/Mac).
+
+Após 5 senhas erradas em 15 minutos, o acesso daquele endereço fica bloqueado por 15 minutos.
+
 ## Como usar
 1. Dê dois cliques em **`INICIAR.bat`** (abre o servidor e o navegador em `http://localhost:5000`).
-2. Acesse **📦 Empenhos** no topo e cadastre:
+2. Em **📦 Empenhos**, cadastre:
    - **Empenho**: número da NE, processo e credor.
-   - **Itens**: descrição, und, quantidade empenhada e valor unitário (o total e o saldo calculam automaticamente).
-   - **Pedido**: escolha os itens e as quantidades solicitadas.
-   - **Recebimento**: informe a NF e as quantidades recebidas — só aqui o **saldo físico** e o valor **pago** diminuem/aumentam.
-
-## Banco de dados
-- **Local (desenvolvimento)**: SQLite em `aprov.db` — usado automaticamente quando a variável `DATABASE_URL` **não** está definida.
-- **Vercel (produção)**: **PostgreSQL** — usado automaticamente quando `DATABASE_URL` está definida (ex.: Vercel Postgres, Neon, Supabase). O schema é criado sozinho na inicialização.
-
-## Deploy no Vercel
-1. Suba o projeto para o GitHub (já está em `https://github.com/Mchristopher120/setordeaprovisionamento`).
-2. Crie uma conta em vercel.com e **Import Project** a partir do repositório.
-3. Na aba **Storage** do projeto, crie um banco **Vercel Postgres** (ou adicione um Postgres externo/Neon).
-4. No projeto, adicione a variável de ambiente `DATABASE_URL` com a connection string do banco (o Vercel oferece esse valor ao criar o banco).
-5. Clique em **Deploy**. As tabelas são criadas automaticamente no primeiro boot.
-
-Obs.: o SQLite local (`aprov.db`) não é usado no Vercel — o preview/banco de produção usa sempre o PostgreSQL.
+   - **Itens**: digite na tabelinha ou **cole direto do Excel** (colunas: Item, Descrição, Und, Qtde, Valor unit.). Também aceita arquivo `.csv`. Valores com vírgula ou ponto (`22,50` ou `22.50`).
+   - **Pedido**: itens, quantidades e **prazo de entrega** (padrão 30 dias). O PDF para o fornecedor sai pelo botão 📄.
+   - **Recebimento**: NF + quantidades que chegaram. Isso dá baixa no saldo físico e **liquida** o valor.
+   - **Pagamento**: número da OB, data e valor (até o que está liquidado).
+3. **🕘 Histórico** mostra quem fez cada alteração. A aba **Lixeira** permite restaurar exclusões.
+4. **⬇ Excel** baixa uma planilha com empenhos, itens, pedidos, NFs e pagamentos.
 
 ## Regras do sistema
-- **Saldo físico** = qtde empenhada − Σ qtde recebida (baixa somente ao registrar recebimento com NF).
-- **Pago** = Σ (qtde recebida × valor unitário) — vem dos recebimentos.
-- **A liquidar** = valor total do item − pago.
-- Status do pedido: `INCLUIDO` → `PARCIAL` → `RECEBIDO`.
+- **Saldo físico** = qtde empenhada − recebido.
+- **Saldo a pedir** = qtde empenhada − recebido − pedido em aberto. Um pedido novo não pode passar dele.
+- **Liquidado** = Σ (qtde recebida × valor unitário), vindo das NFs.
+- **Pago** = Σ pagamentos (OB). Não pode passar do liquidado.
+- **A liquidar** = empenhado − liquidado · **A pagar** = liquidado − pago.
+- **Reforço / anulação** (botão ±) altera a quantidade do item e guarda o documento. A anulação vai até o saldo a pedir.
+- **Status do pedido**: `Aguardando` → `Parcial` → `Recebido`. **Encerrado** é o pedido fechado manualmente: o que faltava volta ao saldo a pedir.
+- **Atrasado** = pedido aguardando ou parcial com a data de entrega (data + prazo) vencida.
+- O recebimento aceita só os itens do pedido e até o que falta chegar.
+- **Exclusões vão para a lixeira**, com tudo o que saiu junto. NF, item ou pedido com valor já pago (OB) só podem ser excluídos depois de excluir o pagamento.
 
-## Funcionalidades
-- **Cadastro de empenhos** por item, com múltiplos itens por empenho.
-- **Pedidos** parciais por item e **recebimentos** com número de NF e data.
-- **PDF do pedido** gerado automaticamente para envio ao fornecedor.
-- **KPIs**: empenhos, itens, pedidos e pedidos em aberto.
-- **Dashboard (linha antiga)**: ainda disponível em `/` para consulta de contratos via **Importar CSV** (formato abaixo).
+## Banco de dados
+- **Local (desenvolvimento)**: SQLite em `aprov.db`, usado automaticamente quando `DATABASE_URL` **não** está definida.
+- **Vercel (produção)**: **PostgreSQL**, usado quando `DATABASE_URL` está definida (Neon, Vercel Postgres, Supabase).
+- As tabelas e colunas novas são **criadas e migradas sozinhas** ao iniciar. Não é preciso rodar nada no banco.
+
+## Deploy no Vercel
+1. Importe o repositório em vercel.com (**Import Project**).
+2. Em **Storage**, crie o banco (Vercel Postgres ou Neon) para gerar a `DATABASE_URL`.
+3. Em **Settings → Environment Variables**, crie `APP_PASSWORD` e `SECRET_KEY`.
+4. Clique em **Deploy**.
 
 ## Estrutura
 ```
-dashboard_aprov/
-  app.py           # Backend Flask (API + banco: SQLite local / PostgreSQL no Vercel)
-  templates/       # index.html e empenhos.html
-  static/          # style.css + app.js + empenhos.js
-  static/fonts/    # Fontes do PDF (DejaVu Sans — compatível com Vercel)
-  aprov.db         # Banco SQLite local (criado automaticamente)
-  exemplo.csv      # Modelo do formato CSV (dashboard antigo)
-  INICIAR.bat      # Inicializador local
-  vercel.json      # Configuração de deploy no Vercel
+app.py              # Backend Flask (API, login, histórico, lixeira, PDF, Excel)
+templates/          # index (dashboard), empenhos, historico, login, erro, _topbar
+static/ui.js        # utilitários comuns (formatação, números pt-BR, ordenação)
+static/charts.js    # gráficos em SVG/HTML puro (funcionam offline)
+static/app.js       # dashboard
+static/empenhos.js  # tela de empenhos
+static/historico.js # histórico e lixeira
+static/style.css
+static/fonts/       # fontes do PDF (DejaVu Sans)
+INICIAR.bat         # inicializador local
+vercel.json         # configuração de deploy
 ```
-
-## Colunas esperadas no CSV (dashboard antigo)
-`NE | NOME CREDOR | DIAS | A LIQUIDAR | PAGO | OBSERVAÇÕES | SITUAÇÃO`
-
-Valores em moeda podem vir em formato pt-BR (`1.234,56`), US (`1234.56`) ou com "R$".

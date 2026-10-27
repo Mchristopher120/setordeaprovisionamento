@@ -1,25 +1,28 @@
-// Tela de Empenhos (depende de ui.js: fmtMoney, fmtNum, escapeHTML, pct, pctCell, fetchJSON, ordenar...)
-let estado = {
-    empenhoId: null, itens: [], pedidos: [], empenhos: [], pedidoAtual: null, recebItens: [],
+// Tela de Empenhos (depende de ui.js)
+const estado = {
+    empenhoId: null, empenhoAtual: null, itens: [], pedidos: [], pagamentos: [], movimentos: [], financeiro: {},
+    empenhos: [], pedidoAtual: null, pedidoEditando: null, nfEditando: null, itemMov: null, empenhoEditando: null,
     sortLista: { key: null, dir: 1 }, sortItens: { key: null, dir: 1 }, sortPedidos: { key: null, dir: 1 },
 };
 
 const $ = (id) => document.getElementById(id);
 const esc = escapeHTML;
 const toast = showToast;
-const hoje = () => new Date().toISOString().slice(0, 10);
-const numBR = (s) => parseFloat(String(s ?? '').trim().replace(/\./g, '').replace(',', '.')) || 0;
+const hoje = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 const EPS = 1e-9;
 
 // ---------- Modais ----------
 function abrirModal(id) {
     $(id).style.display = 'flex';
-    const primeiro = $(id).querySelector('input:not([disabled]), select');
+    const primeiro = $(id).querySelector('input:not([disabled]):not([type=radio]):not([type=file]), textarea');
     if (primeiro) setTimeout(() => primeiro.focus(), 30);
 }
 function fecharModal(id) { $(id).style.display = 'none'; }
 document.querySelectorAll('.modal').forEach(m => {
-    m.addEventListener('click', e => { if (e.target === m) m.style.display = 'none'; });
+    m.addEventListener('mousedown', e => { if (e.target === m) m.style.display = 'none'; });
 });
 document.querySelectorAll('[data-close]').forEach(b => {
     b.addEventListener('click', () => b.closest('.modal').style.display = 'none');
@@ -37,93 +40,187 @@ async function comBotao(btn, fn) {
     finally { btn.disabled = false; }
 }
 
-// ---------- Carregar lista ----------
+/** Executa uma ação da API, mostra o erro ou a mensagem de sucesso e recarrega o detalhe. */
+async function acao(promessa, sucesso, { recarregar = true } = {}) {
+    try {
+        const d = await promessa;
+        if (!d || !d.ok) { toast((d && d.error) || 'Não foi possível concluir', 'error'); return null; }
+        if (sucesso) toast(sucesso, 'success');
+        if (recarregar && estado.empenhoId) await abrirDetalhe(estado.empenhoId, { pushUrl: false, rolar: false });
+        return d;
+    } catch (err) { toast(err.message, 'error'); return null; }
+}
+
+// =====================================================================
+// LISTA
+// =====================================================================
 async function carregarLista() {
-    if (!estado.empenhos.length) $('tbodyEmpenhos').innerHTML = linhaCarregando(8);
+    if (!estado.empenhos.length) $('tbodyEmpenhos').innerHTML = linhaCarregando(9);
     const [empenhos, stats] = await Promise.all([
         fetchJSON('/api/empenhos'),
         fetchJSON('/api/stats_empenhos'),
     ]);
     estado.empenhos = empenhos;
     renderKpis(stats);
+    preencherAnos();
     renderLista();
 }
 
 function renderKpis(s) {
     $('kpis').innerHTML = `
-        <div class="kpi accent"><div class="kpi-label">Empenhos</div><div class="kpi-value">${fmtNum(s.empenhos)}</div><div class="kpi-sub">Cadastrados</div></div>
-        <div class="kpi warning"><div class="kpi-label">Itens</div><div class="kpi-value">${fmtNum(s.itens)}</div><div class="kpi-sub">Empenhados</div></div>
-        <div class="kpi green"><div class="kpi-label">Empenhado</div><div class="kpi-value">${fmtMoney(s.valor_empenhado)}</div><div class="kpi-sub">${pct(s.percentual_pago)} pago</div></div>
-        <div class="kpi red"><div class="kpi-label">A Liquidar</div><div class="kpi-value">${fmtMoney(s.valor_a_liquidar)}</div><div class="kpi-sub">Saldo financeiro</div></div>
-        <div class="kpi amber"><div class="kpi-label">Pedidos em Aberto</div><div class="kpi-value">${fmtNum(s.pedidos_em_aberto)}</div><div class="kpi-sub">Aguardando receb.</div></div>`;
+        <div class="kpi accent"><div class="kpi-label">Empenhos</div><div class="kpi-value">${fmtNum(s.empenhos)}</div><div class="kpi-sub">${fmtNum(s.itens)} itens</div></div>
+        <div class="kpi slate"><div class="kpi-label">Empenhado</div><div class="kpi-value">${fmtMoney(s.valor_empenhado)}</div><div class="kpi-sub">A liquidar ${fmtMoneyCurto(s.valor_a_liquidar)}</div></div>
+        <div class="kpi teal"><div class="kpi-label">Liquidado</div><div class="kpi-value">${fmtMoney(s.valor_liquidado)}</div><div class="kpi-sub">${pct(s.percentual_liquidado)} do empenhado</div></div>
+        <div class="kpi green"><div class="kpi-label">Pago</div><div class="kpi-value">${fmtMoney(s.valor_pago)}</div><div class="kpi-sub">A pagar ${fmtMoneyCurto(s.valor_a_pagar)}</div></div>
+        <div class="kpi amber"><div class="kpi-label">Pedidos em Aberto</div><div class="kpi-value">${fmtNum(s.pedidos_em_aberto)}</div>
+            <div class="kpi-sub">${s.pedidos_atrasados ? `<span class="text-red"><strong>${fmtNum(s.pedidos_atrasados)}</strong> atrasado(s)</span>` : 'nenhum atrasado'}</div></div>`;
 }
 
+function preencherAnos() {
+    const sel = $('fAno'), atual = sel.value;
+    const anos = [...new Set(estado.empenhos.map(e => e.ano).filter(Boolean))].sort().reverse();
+    sel.innerHTML = '<option value="">Todos os anos</option>' + anos.map(a => `<option ${a === atual ? 'selected' : ''}>${esc(a)}</option>`).join('');
+}
+
+function filtrar(lista) {
+    const busca = normalizar($('fBusca').value.trim());
+    const sit = $('fSituacao').value, ano = $('fAno').value, saldo = $('fSaldo').checked;
+    $('btnLimparFiltros').hidden = !(busca || sit || ano || saldo);
+    return lista.filter(e => {
+        if (busca && !normalizar(`${e.ne} ${e.nome_credor} ${e.processo}`).includes(busca)) return false;
+        if (sit === 'ATRASO' ? !e.pedidos_atrasados : (sit && e.situacao !== sit)) return false;
+        if (ano && e.ano !== ano) return false;
+        if (saldo && !(e.a_liquidar > 0.005)) return false;
+        return true;
+    });
+}
+
+const SITUACAO = { ANDAMENTO: ['Em andamento', 'info'], CONCLUIDO: ['Concluído', 'ok'], SEM_ITENS: ['Sem itens', 'neutro'] };
+
 function renderLista() {
-    const lista = ordenar(estado.empenhos, estado.sortLista.key, estado.sortLista.dir);
-    $('tbodyEmpenhos').innerHTML = lista.length ? lista.map(e => `
+    const todos = estado.empenhos;
+    const lista = ordenar(filtrar(todos), estado.sortLista.key, estado.sortLista.dir);
+    $('countBadge').textContent = lista.length === todos.length
+        ? `${fmtNum(todos.length)} empenho${todos.length === 1 ? '' : 's'}`
+        : `${fmtNum(lista.length)} de ${fmtNum(todos.length)}`;
+    if (!todos.length) {
+        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">📦</span>Nenhum empenho cadastrado ainda.<br>Clique em "＋ Novo Empenho" para começar.</td></tr>`;
+        return;
+    }
+    if (!lista.length) {
+        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">🔎</span>Nenhum empenho encontrado com esses filtros.</td></tr>`;
+        return;
+    }
+    $('tbodyEmpenhos').innerHTML = lista.map(e => {
+        const [rot, cls] = SITUACAO[e.situacao] || ['', ''];
+        return `
         <tr>
-            <td><strong>${esc(e.ne)}</strong></td>
+            <td class="text-left"><strong>${esc(e.ne)}</strong>
+                <div class="cell-badges"><span class="badge ${cls}">${rot}</span>
+                ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">⏰ ${e.pedidos_atrasados} atrasado${e.pedidos_atrasados > 1 ? 's' : ''}</span>` : ''}</div></td>
             <td>${esc(e.nome_credor)}</td>
             <td>${esc(e.processo)}</td>
             <td class="num money">${fmtMoney(e.valor_empenhado)}</td>
+            <td class="num money text-teal">${fmtMoney(e.valor_liquidado)}</td>
             <td class="num money text-green">${fmtMoney(e.valor_pago)}</td>
             <td class="num money text-red">${fmtMoney(e.a_liquidar)}</td>
-            <td>${pctCell(e.percentual_pago)}</td>
+            <td>${pctCell(e.percentual_liquidado)}</td>
             <td class="acoes">
                 <button class="btn btn-sm btn-secondary" onclick="abrirDetalhe(${e.id})">Abrir</button>
                 <button class="btn btn-sm btn-danger" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" onclick="apagarEmpenho(${e.id})">🗑</button>
             </td>
-        </tr>`).join('') : `<tr><td colspan="8" class="empty"><span class="empty-icon">📦</span>Nenhum empenho cadastrado ainda.<br>Clique em "＋ Novo Empenho" para começar.</td></tr>`;
-    $('countBadge').textContent = `${fmtNum(lista.length)} empenho${lista.length === 1 ? '' : 's'}`;
+        </tr>`;
+    }).join('');
 }
 
-// ---------- Apagar empenho ----------
+function limparFiltros() {
+    $('fBusca').value = ''; $('fSituacao').value = ''; $('fAno').value = ''; $('fSaldo').checked = false;
+    renderLista();
+}
+
+// =====================================================================
+// EMPENHO: criar / editar / apagar
+// =====================================================================
+function abrirModalEmpenho(editar = false) {
+    estado.empenhoEditando = editar ? estado.empenhoAtual : null;
+    const e = estado.empenhoEditando;
+    $('empModalTitulo').textContent = e ? `Editar Empenho ${e.ne}` : 'Novo Empenho';
+    $('mNe').value = e ? e.ne : '';
+    $('mProcesso').value = e ? (e.processo || '') : '';
+    $('mCredor').value = e ? e.nome_credor : '';
+    abrirModal('modalEmpenho');
+}
+
+async function salvarEmpenho() {
+    const corpo = { ne: $('mNe').value.trim(), processo: $('mProcesso').value.trim(), nome_credor: $('mCredor').value.trim() };
+    if (!corpo.ne || !corpo.nome_credor) { toast('Preencha NE e Credor', 'error'); return; }
+    if (estado.empenhoEditando) {
+        const d = await acao(enviarJSON(`/api/empenhos/${estado.empenhoEditando.id}`, 'PUT', corpo), 'Empenho atualizado');
+        if (d) fecharModal('modalEmpenho');
+        return;
+    }
+    const d = await enviarJSON('/api/empenhos', 'POST', corpo);
+    if (!d.ok) { toast(d.error, 'error'); return; }
+    fecharModal('modalEmpenho');
+    toast('Empenho criado! Agora inclua os itens.', 'success');
+    await abrirDetalhe(d.id);
+    abrirTabelaItens();
+}
+
 async function apagarEmpenho(id) {
-    const e = estado.empenhos.find(x => x.id === id);
-    const ne = e ? e.ne : (estado.empenhoNe || '');
-    if (!confirm(`Apagar o empenho ${ne}?\nTodos os itens, pedidos e recebimentos serão removidos.`)) return;
+    const e = estado.empenhos.find(x => x.id === id) || estado.empenhoAtual;
+    const ne = e ? e.ne : '';
+    if (!confirm(`Apagar o empenho ${ne}?\n\nItens, pedidos, NFs e pagamentos vão juntos para a lixeira.\nÉ possível restaurar depois em Histórico → Lixeira.`)) return;
     try {
-        const d = await fetchJSON(`/api/empenhos/${id}`, { method: 'DELETE' });
+        const d = await enviarJSON(`/api/empenhos/${id}`, 'DELETE');
         if (!d.ok) { toast(d.error, 'error'); return; }
-        toast(`Empenho ${d.ne} apagado.`, 'success');
-        voltarLista();
+        toast(`Empenho ${d.ne} enviado para a lixeira.`, 'success');
+        if (estado.empenhoId) voltarLista(); else carregarLista();
     } catch (err) { toast(err.message, 'error'); }
 }
 
-// ---------- Detalhe do empenho ----------
-async function abrirDetalhe(id, { pushUrl = true } = {}) {
+// =====================================================================
+// DETALHE
+// =====================================================================
+async function abrirDetalhe(id, { pushUrl = true, rolar = true } = {}) {
     let data;
     try { data = await fetchJSON(`/api/empenhos/${id}`); }
     catch (err) { toast(err.message, 'error'); return; }
-    if (!data || !data.empenho) { toast('Empenho não encontrado', 'error'); return; }
-    estado.empenhoId = id;
-    estado.itens = data.itens;
-    estado.pedidos = data.pedidos;
-    const e = data.empenho;
-    estado.empenhoNe = e.ne;
-    const empenhado = data.itens.reduce((a, i) => a + (i.valor_total || 0), 0);
-    const pago = data.itens.reduce((a, i) => a + (i.pago || 0), 0);
+    if (!data || !data.empenho) { toast('Empenho não encontrado', 'error'); if (!estado.empenhoId) voltarLista(); return; }
+    Object.assign(estado, {
+        empenhoId: id, empenhoAtual: data.empenho, itens: data.itens, pedidos: data.pedidos,
+        pagamentos: data.pagamentos, movimentos: data.movimentos, financeiro: data.financeiro,
+    });
+    const e = data.empenho, f = data.financeiro;
+    document.title = `${e.ne} — Empenhos`;
     $('detTitulo').innerHTML = `Empenho ${esc(e.ne)} — ${esc(e.nome_credor)}`;
     $('detResumo').innerHTML = `
-        <span class="chip">Empenhado <strong>${fmtMoney(empenhado)}</strong></span>
-        <span class="chip chip-green">Pago <strong>${fmtMoney(pago)}</strong></span>
-        <span class="chip chip-red">A liquidar <strong>${fmtMoney(Math.max(0, empenhado - pago))}</strong></span>
+        <span class="chip">Empenhado <strong>${fmtMoney(f.empenhado)}</strong></span>
+        <span class="chip chip-teal">Liquidado <strong>${fmtMoney(f.liquidado)}</strong></span>
+        <span class="chip chip-green">Pago <strong>${fmtMoney(f.pago)}</strong></span>
+        <span class="chip chip-red">A liquidar <strong>${fmtMoney(f.a_liquidar)}</strong></span>
+        <span class="chip chip-amber">A pagar <strong>${fmtMoney(f.a_pagar)}</strong></span>
         ${e.processo ? `<span class="chip">Processo <strong>${esc(e.processo)}</strong></span>` : ''}`;
     $('secLista').style.display = 'none';
     $('secDetalhe').style.display = 'block';
     renderItens();
+    renderMovimentos();
     renderPedidos();
+    renderPagamentos();
+    if ($('boxHistorico').open) carregarHistorico();
     if (pushUrl && new URLSearchParams(location.search).get('id') !== String(id)) {
         history.pushState({ id }, '', `/empenhos?id=${id}`);
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (rolar) window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function voltarLista({ pushUrl = true } = {}) {
     estado.empenhoId = null;
-    $('detTitulo').textContent = '';
+    estado.empenhoAtual = null;
+    document.title = 'Empenhos - Aprovisionamento';
     $('secDetalhe').style.display = 'none';
     $('secLista').style.display = 'block';
+    $('boxHistorico').open = false;
     if (pushUrl && location.search) history.pushState({}, '', '/empenhos');
     carregarLista().catch(err => toast(err.message, 'error'));
 }
@@ -139,58 +236,113 @@ function renderItens() {
             <td class="num money">${fmtMoney(i.valor_unitario)}</td>
             <td class="num money">${fmtMoney(i.valor_total)}</td>
             <td class="num">${fmtNum(i.qtde_recebida)}</td>
-            <td class="num ${i.saldo_fisico <= 0 ? 'text-green' : 'text-amber'}"><strong>${fmtNum(i.saldo_fisico)}</strong></td>
-            <td class="num money text-green">${fmtMoney(i.pago)}</td>
-            <td class="num money text-red">${fmtMoney(i.a_liquidar)}</td>
-            <td>${pctCell(i.percentual_pago)}</td>
+            <td class="num ${i.saldo_fisico <= EPS ? 'text-green' : 'text-amber'}"><strong>${fmtNum(i.saldo_fisico)}</strong></td>
+            <td class="num" title="${i.reservado > 0 ? `${fmtNum(i.reservado)} reservado(s) em pedidos abertos` : ''}">
+                <strong>${fmtNum(i.saldo_a_pedir)}</strong>${i.reservado > 0 ? `<div class="muted small">${fmtNum(i.reservado)} em pedido</div>` : ''}</td>
+            <td class="num money text-teal">${fmtMoney(i.liquidado)}</td>
+            <td>${pctCell(i.percentual_liquidado)}</td>
             <td class="acoes">
                 <button class="btn btn-sm btn-secondary" title="Editar item" aria-label="Editar item" onclick="editarItem(${i.id})">✏️</button>
+                <button class="btn btn-sm btn-secondary" title="Reforço ou anulação de quantidade" aria-label="Reforço ou anulação" onclick="abrirMovimento(${i.id})">±</button>
                 <button class="btn btn-sm btn-danger" title="Excluir item" aria-label="Excluir item" onclick="excluirItem(${i.id})">🗑</button>
             </td>
-        </tr>`).join('') : `<tr><td colspan="12" class="empty"><span class="empty-icon">📄</span>Nenhum item. Clique em "＋ Incluir Itens".</td></tr>`;
+        </tr>`).join('') : `<tr><td colspan="12" class="empty"><span class="empty-icon">📄</span>Nenhum item. Clique em "＋ Itens".</td></tr>`;
+    $('btnNovoPedido').disabled = !estado.itens.some(i => i.saldo_a_pedir > EPS);
+    $('btnNovoPedido').title = $('btnNovoPedido').disabled ? 'Nenhum item com saldo a pedir' : '';
 }
 
-const STATUS_LABEL = { RECEBIDO: 'Recebido', PARCIAL: 'Parcial', INCLUIDO: 'Aguardando' };
+function renderMovimentos() {
+    const movs = estado.movimentos;
+    $('secMovimentos').innerHTML = movs.length ? `
+        <details class="mov-box">
+            <summary>Reforços e anulações (${movs.length})</summary>
+            <table class="nf-table">
+                <thead><tr><th>Data</th><th>Tipo</th><th>Item</th><th>Qtde</th><th>Documento</th><th>Obs.</th></tr></thead>
+                <tbody>${movs.map(m => `
+                    <tr>
+                        <td>${dataBR(m.data)}</td>
+                        <td><span class="badge ${m.tipo === 'REFORCO' ? 'ok' : 'critico'}">${m.tipo === 'REFORCO' ? '＋ Reforço' : '− Anulação'}</span></td>
+                        <td>${esc(m.numero_item)} • ${esc(m.descricao)}</td>
+                        <td class="num">${fmtNum(m.qtde)} ${esc(m.und)}</td>
+                        <td>${esc(m.documento)}</td>
+                        <td>${esc(m.observacoes)}</td>
+                    </tr>`).join('')}</tbody>
+            </table>
+        </details>` : '';
+}
+
+const STATUS = {
+    RECEBIDO: ['Recebido', 'ok'], PARCIAL: ['Parcial', 'atencao'],
+    INCLUIDO: ['Aguardando', 'info'], ENCERRADO: ['Encerrado', 'neutro'],
+};
 
 function renderPedidos() {
     const pedidos = ordenar(estado.pedidos, estado.sortPedidos.key, estado.sortPedidos.dir);
     $('tbodyPedidos').innerHTML = pedidos.length ? pedidos.map(p => {
-        const cls = p.status === 'RECEBIDO' ? 'ok' : p.status === 'PARCIAL' ? 'atencao' : 'info';
-        const completo = p.status === 'RECEBIDO';
-        return `<tr>
-            <td><strong>${esc(p.numero_pedido)}</strong></td>
-            <td>${esc(p.data_pedido)}</td>
+        const [rot, cls] = STATUS[p.status] || [p.status, 'info'];
+        const aberto = p.status === 'INCLUIDO' || p.status === 'PARCIAL';
+        const venc = p.vencimento
+            ? `${dataBR(p.vencimento)}${p.dias_atraso ? `<div><span class="badge critico">⏰ ${p.dias_atraso} dia${p.dias_atraso > 1 ? 's' : ''} de atraso</span></div>` : ''}`
+            : '<span class="muted">—</span>';
+        return `<tr class="${p.dias_atraso ? 'row-alerta' : ''}">
+            <td><strong>${esc(p.numero_pedido)}</strong>${p.observacoes ? `<div class="muted small">${esc(p.observacoes)}</div>` : ''}</td>
+            <td>${dataBR(p.data_pedido)}</td>
+            <td>${venc}</td>
             <td class="num">${fmtNum(p.qt_itens)}</td>
             <td class="num">${fmtNum(p.qtde_total_pedida)}</td>
             <td class="num">${fmtNum(p.qtde_total_recebida)}</td>
-            <td><span class="badge ${cls}">${STATUS_LABEL[p.status] || p.status}</span></td>
+            <td><span class="badge ${cls}">${rot}</span></td>
             <td class="acoes">
-                <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="Gerar PDF do pedido para o fornecedor">📄 PDF</button>
-                ${p.qt_recebimentos > 0 ? `<button class="btn btn-sm btn-secondary" onclick="verNfs(${p.id})" title="Ver notas fiscais do pedido">🧾 NFs</button>` : ''}
-                <button class="btn btn-sm ${completo ? 'btn-secondary' : 'btn-primary'}" ${completo ? 'disabled title="Pedido já recebido por completo"' : ''} onclick="abrirRecebimento(${p.id})">📥 Receber</button>
+                ${aberto ? `<button class="btn btn-sm btn-primary" onclick="abrirRecebimento(${p.id})">📥 Receber</button>` : ''}
+                <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">📄</button>
+                ${p.qt_recebimentos > 0 ? `<button class="btn btn-sm btn-secondary" onclick="verNfs(${p.id})" title="Ver, corrigir ou excluir NFs" aria-label="Notas fiscais">🧾 NFs</button>` : ''}
+                <button class="btn btn-sm btn-secondary" onclick="editarPedido(${p.id})" title="Editar pedido" aria-label="Editar pedido">✏️</button>
+                ${p.status === 'PARCIAL' || p.status === 'INCLUIDO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, false)" title="Encerrar: o que falta não virá e volta ao saldo a pedir" aria-label="Encerrar pedido">🔒</button>` : ''}
+                ${p.status === 'ENCERRADO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, true)" title="Reabrir pedido" aria-label="Reabrir pedido">🔓</button>` : ''}
                 <button class="btn btn-sm btn-danger" title="Excluir pedido" aria-label="Excluir pedido" onclick="excluirPedido(${p.id})">🗑</button>
             </td>
         </tr>`;
-    }).join('') : `<tr><td colspan="7" class="empty"><span class="empty-icon">🧾</span>Nenhum pedido. Clique em "＋ Fazer Pedido".</td></tr>`;
+    }).join('') : `<tr><td colspan="8" class="empty"><span class="empty-icon">🧾</span>Nenhum pedido. Clique em "＋ Fazer Pedido".</td></tr>`;
 }
 
-// ---------- Ações ----------
-async function criarEmpenho() {
-    const ne = $('mNe').value.trim(), processo = $('mProcesso').value.trim(), credor = $('mCredor').value.trim();
-    if (!ne || !credor) { toast('Preencha NE e Credor', 'error'); return; }
-    const d = await fetchJSON('/api/empenhos', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ne, processo, nome_credor: credor }),
-    });
-    if (!d.ok) { toast(d.error, 'error'); return; }
-    fecharModal('modalEmpenho');
-    $('mNe').value = $('mProcesso').value = $('mCredor').value = '';
-    toast(`Empenho criado! Agora inclua os itens.`, 'success');
-    await abrirDetalhe(d.id);
-    abrirTabelaItens();
+function renderPagamentos() {
+    const f = estado.financeiro;
+    $('btnNovoPagamento').disabled = !(f.a_pagar > 0.005);
+    $('btnNovoPagamento').title = $('btnNovoPagamento').disabled ? 'Nada liquidado a pagar' : '';
+    $('tbodyPagamentos').innerHTML = estado.pagamentos.length ? estado.pagamentos.map(p => `
+        <tr>
+            <td><strong>${esc(p.ob)}</strong></td>
+            <td>${dataBR(p.data_pagamento)}</td>
+            <td class="num money text-green">${fmtMoney(p.valor)}</td>
+            <td>${esc(p.nf)}</td>
+            <td class="text-left">${esc(p.observacoes)}</td>
+            <td class="acoes"><button class="btn btn-sm btn-danger" title="Excluir pagamento" aria-label="Excluir pagamento" onclick="excluirPagamento(${p.id})">🗑</button></td>
+        </tr>`).join('') + `
+        <tr class="row-total"><td colspan="2">Total pago</td><td class="num money">${fmtMoney(f.pago)}</td>
+            <td colspan="3" class="text-left muted">A pagar: <strong class="${f.a_pagar > 0.005 ? 'text-amber' : 'text-green'}">${fmtMoney(f.a_pagar)}</strong></td></tr>`
+        : `<tr><td colspan="6" class="empty small">Nenhum pagamento registrado.${f.a_pagar > 0.005 ? ` Liquidado a pagar: <strong>${fmtMoney(f.a_pagar)}</strong>.` : ''}</td></tr>`;
 }
 
-// ================= TABELINHA DE ITENS (inclusão em lote) =================
+// ---------- Histórico do empenho ----------
+const ACOES = {
+    CRIAR: '🆕', EDITAR: '✏️', EXCLUIR: '🗑', RESTAURAR: '♻️', RECEBER: '📥', PAGAR: '💰',
+    ENCERRAR: '🔒', REFORCO: '➕', ANULACAO: '➖', LOGIN: '🔑', EXPORTAR: '⬇',
+};
+async function carregarHistorico() {
+    $('listaHistorico').innerHTML = '<li class="muted">Carregando…</li>';
+    try {
+        const h = await fetchJSON(`/api/historico?empenho_id=${estado.empenhoId}&limite=100`);
+        $('listaHistorico').innerHTML = h.length ? h.map(x => `
+            <li><span class="tl-ico">${ACOES[x.acao] || '•'}</span>
+                <div><div>${esc(x.descricao)}</div>
+                <div class="muted small">${dataBR(x.quando)} · ${esc(x.usuario)}</div></div></li>`).join('')
+            : '<li class="muted">Nenhum registro.</li>';
+    } catch (err) { $('listaHistorico').innerHTML = `<li class="text-red">${esc(err.message)}</li>`; }
+}
+
+// =====================================================================
+// ITENS (inclusão em lote, edição, importação, reforço/anulação)
+// =====================================================================
 function criarLinha(id = null, numero_item = '', descricao = '', und = '', qtde = '', vunit = '') {
     const tr = document.createElement('tr');
     tr.dataset.linhaId = id ?? '';
@@ -204,6 +356,7 @@ function criarLinha(id = null, numero_item = '', descricao = '', und = '', qtde 
     tr.querySelectorAll('.num-input').forEach(inp => inp.addEventListener('input', recalcularTotalItens));
     $('tbodyItemEdit').appendChild(tr);
     recalcularTotalItens();
+    return tr;
 }
 
 function removerLinha(btn) {
@@ -214,8 +367,8 @@ function removerLinha(btn) {
 function recalcularTotalItens() {
     let total = 0;
     document.querySelectorAll('#tbodyItemEdit tr').forEach(tr => {
-        const q = numBR(tr.querySelector('[data-f="qtde_empenhada"]').value);
-        const v = numBR(tr.querySelector('[data-f="valor_unitario"]').value);
+        const q = parseNumBR(tr.querySelector('[data-f="qtde_empenhada"]').value);
+        const v = parseNumBR(tr.querySelector('[data-f="valor_unitario"]').value);
         total += q * v;
     });
     $('itemTotal').textContent = fmtMoney(total);
@@ -229,34 +382,73 @@ function lerLinhas() {
         if (!descricao) return;
         itens.push({
             linha_id: tr.dataset.linhaId || null,
-            numero_item: get('numero_item'),
-            descricao,
-            und: get('und'),
-            qtde_empenhada: numBR(get('qtde_empenhada')),
-            valor_unitario: numBR(get('valor_unitario')),
+            numero_item: get('numero_item'), descricao, und: get('und'),
+            qtde_empenhada: parseNumBR(get('qtde_empenhada')),
+            valor_unitario: parseNumBR(get('valor_unitario')),
         });
     });
     return itens;
 }
 
+const numParaCampo = (n) => String(n ?? '').replace('.', ',');
+
 function abrirTabelaItens(editItem = null) {
     $('tbodyItemEdit').innerHTML = '';
+    $('txtImportar').value = ''; $('importMsg').textContent = '';
     if (editItem) {
         $('itemModalTitulo').textContent = `Editar Item #${editItem.numero_item} — ${editItem.descricao}`;
         $('btnSalvarItem').textContent = 'Salvar Alteração';
         criarLinha(editItem.id, editItem.numero_item, editItem.descricao, editItem.und,
-                   String(editItem.qtde_empenhada).replace('.', ','), String(editItem.valor_unitario).replace('.', ','));
+                   numParaCampo(editItem.qtde_empenhada), numParaCampo(editItem.valor_unitario));
         $('btnAddLinha').style.display = 'none';
-        $('itemEditHint').textContent = 'Altere os campos e clique em Salvar Alteração.';
+        $('boxImportar').style.display = 'none';
+        $('itemEditHint').textContent = 'Para aumentar ou reduzir a quantidade com registro do documento, prefira o botão ± (reforço/anulação).';
     } else {
         $('itemModalTitulo').textContent = 'Incluir Itens';
         $('btnSalvarItem').textContent = 'Salvar Itens';
         $('btnAddLinha').style.display = '';
-        $('itemEditHint').textContent = 'Preencha cada linha e clique em Salvar. Linhas em branco são ignoradas.';
+        $('boxImportar').style.display = '';
+        $('itemEditHint').textContent = 'Valores aceitam vírgula ou ponto (22,50 ou 22.50). Linhas sem descrição são ignoradas.';
         criarLinha();
         criarLinha();
     }
     abrirModal('modalItem');
+}
+
+/**
+ * Importação: aceita linhas coladas do Excel (separadas por TAB) ou CSV (; ou ,).
+ * Colunas: [Item], Descrição, Und, Qtde, Valor unit.  — o cabeçalho é ignorado.
+ */
+function importarTexto(texto) {
+    const linhas = texto.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!linhas.length) return { ok: 0, ignoradas: 0 };
+    const sep = linhas[0].includes('\t') ? '\t' : (linhas[0].includes(';') ? ';' : ',');
+    let ok = 0, ignoradas = 0;
+    // remove linhas vazias da tabelinha antes de importar
+    document.querySelectorAll('#tbodyItemEdit tr').forEach(tr => {
+        if (![...tr.querySelectorAll('input')].some(i => i.value.trim())) tr.remove();
+    });
+    linhas.forEach(l => {
+        const c = l.split(sep).map(x => x.trim().replace(/^"|"$/g, ''));
+        if (/descri/i.test(l) && /qt|quant/i.test(l)) return; // cabeçalho
+        let num = '', desc, und, qtde, vu;
+        if (c.length >= 5) [num, desc, und, qtde, vu] = c;
+        else if (c.length === 4) [desc, und, qtde, vu] = c;
+        else { ignoradas++; return; }
+        if (!desc || !(parseNumBR(qtde) > 0)) { ignoradas++; return; }
+        criarLinha(null, num, desc, und, qtde, vu);
+        ok++;
+    });
+    if (!document.querySelector('#tbodyItemEdit tr')) criarLinha();
+    return { ok, ignoradas };
+}
+
+function executarImportacao(texto) {
+    const r = importarTexto(texto);
+    $('importMsg').textContent = r.ok
+        ? `✓ ${r.ok} item(ns) adicionado(s) à lista${r.ignoradas ? `, ${r.ignoradas} linha(s) ignorada(s)` : ''}. Confira e salve.`
+        : 'Nenhuma linha reconhecida. Use as colunas: Item, Descrição, Und, Qtde, Valor unit.';
+    if (r.ok) $('txtImportar').value = '';
 }
 
 function editarItem(id) {
@@ -268,216 +460,342 @@ function editarItem(id) {
 async function salvarItem() {
     const linhas = lerLinhas();
     if (!linhas.length) { toast('Informe ao menos um item com descrição', 'error'); return; }
-
     const edicao = linhas.length === 1 && linhas[0].linha_id;
     if (edicao) {
         const it = linhas[0];
-        const d = await fetchJSON(`/api/itens/${it.linha_id}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                numero_item: it.numero_item, descricao: it.descricao, und: it.und,
-                qtde_empenhada: it.qtde_empenhada, valor_unitario: it.valor_unitario,
-            }),
-        });
-        if (!d.ok) { toast(d.error, 'error'); return; }
-        fecharModal('modalItem');
-        toast(`Item atualizado (total ${fmtMoney(d.valor_total)})`, 'success');
+        const d = await acao(enviarJSON(`/api/itens/${it.linha_id}`, 'PUT', it), null);
+        if (d) { fecharModal('modalItem'); toast(`Item atualizado (total ${fmtMoney(d.valor_total)})`, 'success'); }
     } else {
-        const d = await fetchJSON(`/api/empenhos/${estado.empenhoId}/itens`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ itens: linhas }),
-        });
-        if (!d.ok) { toast(d.error, 'error'); return; }
-        fecharModal('modalItem');
-        toast(`${d.quantidade} item(ns) incluído(s) — total ${fmtMoney(d.valor_total)}`, 'success');
+        const d = await acao(enviarJSON(`/api/empenhos/${estado.empenhoId}/itens`, 'POST', { itens: linhas }), null);
+        if (d) { fecharModal('modalItem'); toast(`${d.quantidade} item(ns) incluído(s) — total ${fmtMoney(d.valor_total)}`, 'success'); }
     }
-    abrirDetalhe(estado.empenhoId, { pushUrl: false });
 }
 
 async function excluirItem(id) {
-    if (!confirm('Excluir este item? Os pedidos/recebimentos ligados a ele também saem.')) return;
-    try {
-        const d = await fetchJSON(`/api/itens/${id}`, { method: 'DELETE' });
-        if (!d.ok) { toast(d.error, 'error'); return; }
-        toast('Item excluído', 'success');
-        abrirDetalhe(estado.empenhoId, { pushUrl: false });
-    } catch (err) { toast(err.message, 'error'); }
+    const item = estado.itens.find(i => i.id === id);
+    if (!confirm(`Excluir o item ${item ? item.descricao : ''}?\nOs pedidos/NFs ligados a ele também saem (vão para a lixeira).`)) return;
+    await acao(enviarJSON(`/api/itens/${id}`, 'DELETE'), 'Item enviado para a lixeira');
 }
 
-// ---------- Pedidos ----------
-function montarPedItens() {
+function abrirMovimento(id) {
+    const i = estado.itens.find(x => x.id === id);
+    if (!i) return;
+    estado.itemMov = i;
+    $('movTitulo').textContent = `Reforço / Anulação — ${i.descricao}`;
+    $('movInfo').innerHTML = `Quantidade atual <strong>${fmtNum(i.qtde_empenhada)} ${esc(i.und)}</strong> · saldo a pedir <strong>${fmtNum(i.saldo_a_pedir)}</strong> · valor unit. ${fmtMoney(i.valor_unitario)}`;
+    $('movQtde').value = ''; $('movDoc').value = ''; $('movObs').value = ''; $('movData').value = hoje();
+    document.querySelector('input[name=movTipo][value=REFORCO]').checked = true;
+    previewMovimento();
+    abrirModal('modalMov');
+}
+
+function previewMovimento() {
+    const i = estado.itemMov; if (!i) return;
+    const tipo = document.querySelector('input[name=movTipo]:checked').value;
+    const q = parseNumBR($('movQtde').value);
+    if (!q) { $('movPreview').textContent = tipo === 'ANULACAO' ? `Máximo para anular: ${fmtNum(i.saldo_a_pedir)} ${i.und}` : ''; return; }
+    const nova = i.qtde_empenhada + (tipo === 'REFORCO' ? q : -q);
+    const excede = tipo === 'ANULACAO' && q > i.saldo_a_pedir + EPS;
+    $('movPreview').innerHTML = excede
+        ? `<span class="text-red">Acima do saldo a pedir (${fmtNum(i.saldo_a_pedir)})</span>`
+        : `Nova quantidade: <strong>${fmtNum(nova)} ${esc(i.und)}</strong> · novo total ${fmtMoney(nova * i.valor_unitario)} (${tipo === 'REFORCO' ? '+' : '−'}${fmtMoney(q * i.valor_unitario)})`;
+}
+
+async function salvarMovimento() {
+    const tipo = document.querySelector('input[name=movTipo]:checked').value;
+    const d = await acao(enviarJSON(`/api/itens/${estado.itemMov.id}/movimentos`, 'POST', {
+        tipo, qtde: parseNumBR($('movQtde').value), data: $('movData').value,
+        documento: $('movDoc').value.trim(), observacoes: $('movObs').value.trim(),
+    }), tipo === 'REFORCO' ? 'Reforço registrado' : 'Anulação registrada');
+    if (d) fecharModal('modalMov');
+}
+
+// =====================================================================
+// PEDIDOS
+// =====================================================================
+function atualizarVencimento() {
+    const d = $('mPedData').value || hoje();
+    const prazo = parseInt($('mPedPrazo').value, 10);
+    if (!prazo && prazo !== 0) { $('mPedVenc').textContent = 'Sem prazo definido'; return; }
+    const v = new Date(d + 'T12:00:00'); v.setDate(v.getDate() + prazo);
+    $('mPedVenc').textContent = `Entrega até ${v.toLocaleDateString('pt-BR')}`;
+}
+
+/** Monta as linhas de itens do pedido. Na edição, o saldo considera o que o próprio pedido já reserva. */
+function montarPedItens(pedidoInfo = null) {
     const box = $('mPedItens');
-    const itens = estado.itens.filter(i => (i.saldo_fisico || 0) > 0);
-    box.innerHTML = itens.length ? itens.map(i => `
+    const noPedido = {};
+    if (pedidoInfo) pedidoInfo.itens.forEach(i => { noPedido[i.item_id] = i; });
+    const encerrado = pedidoInfo && pedidoInfo.status === 'ENCERRADO';
+    const linhas = estado.itens.map(i => {
+        const p = noPedido[i.id];
+        const recebido = p ? p.qtde_recebida : 0;
+        const reservaPropria = p && !encerrado ? Math.max(0, p.qtde_pedida - p.qtde_recebida) : 0;
+        const max = recebido + i.saldo_a_pedir + reservaPropria;
+        return { i, p, recebido, max };
+    }).filter(l => l.p || l.max > EPS);
+    box.innerHTML = linhas.length ? linhas.map(({ i, p, recebido, max }) => `
         <div class="ped-item">
-            <label for="ped-${i.id}">${esc(i.numero_item)} • ${esc(i.descricao)} <span class="muted">(saldo ${fmtNum(i.saldo_fisico)} ${esc(i.und)})</span></label>
-            <input id="ped-${i.id}" type="number" step="any" min="0" max="${i.saldo_fisico}" placeholder="Qtde pedida" data-item="${i.id}" data-max="${i.saldo_fisico}">
-        </div>`).join('') : '<p class="muted">— Todos os itens estão com saldo zerado. —</p>';
-    $('btnSalvarPedido').disabled = !itens.length;
+            <label for="ped-${i.id}">${esc(i.numero_item)} • ${esc(i.descricao)}
+                <span class="muted">— máx. ${fmtNum(max)} ${esc(i.und)}${recebido ? ` (já recebido ${fmtNum(recebido)})` : ''} · ${fmtMoney(i.valor_unitario)}/${esc(i.und) || 'un'}</span></label>
+            <input id="ped-${i.id}" type="text" inputmode="decimal" placeholder="Qtde pedida" data-item="${i.id}"
+                   data-max="${max}" data-min="${recebido}" data-vu="${i.valor_unitario}" value="${p ? numParaCampo(p.qtde_pedida) : ''}">
+        </div>`).join('') + `<div class="item-total">Valor do pedido: <strong id="pedTotal">R$ 0,00</strong></div>`
+        : '<p class="muted">— Nenhum item com saldo a pedir. —</p>';
+    box.querySelectorAll('input[data-item]').forEach(inp => inp.addEventListener('input', totalPedido));
+    totalPedido();
+    $('btnSalvarPedido').disabled = !linhas.length;
+}
+
+function totalPedido() {
+    let t = 0;
+    document.querySelectorAll('#mPedItens input[data-item]').forEach(inp => { t += parseNumBR(inp.value) * parseFloat(inp.dataset.vu || 0); });
+    if ($('pedTotal')) $('pedTotal').textContent = fmtMoney(t);
+}
+
+function abrirNovoPedido() {
+    estado.pedidoEditando = null;
+    $('pedTitulo').textContent = 'Novo Pedido';
+    $('btnSalvarPedido').textContent = 'Salvar Pedido';
+    $('mPedNum').value = ''; $('mPedObs').value = ''; $('mPedData').value = hoje(); $('mPedPrazo').value = 30;
+    atualizarVencimento();
+    montarPedItens();
+    abrirModal('modalPedido');
+}
+
+async function editarPedido(id) {
+    let d;
+    try { d = await fetchJSON(`/api/pedidos/${id}`); } catch (err) { toast(err.message, 'error'); return; }
+    if (!d.ok) { toast(d.error, 'error'); return; }
+    estado.pedidoEditando = d;
+    $('pedTitulo').textContent = `Editar Pedido ${d.pedido.numero_pedido}`;
+    $('btnSalvarPedido').textContent = 'Salvar Alterações';
+    $('mPedNum').value = d.pedido.numero_pedido || '';
+    $('mPedObs').value = d.pedido.observacoes || '';
+    $('mPedData').value = (d.pedido.data_pedido || '').slice(0, 10);
+    $('mPedPrazo').value = d.pedido.prazo_dias ?? '';
+    atualizarVencimento();
+    montarPedItens(d);
+    abrirModal('modalPedido');
 }
 
 async function salvarPedido() {
     const inputs = [...document.querySelectorAll('#mPedItens input[data-item]')];
     for (const inp of inputs) {
-        const v = parseFloat(inp.value) || 0;
+        const v = parseNumBR(inp.value);
         if (v < 0 || v > parseFloat(inp.dataset.max) + EPS) {
-            inp.focus();
-            toast(`Quantidade acima do saldo (máx. ${fmtNum(+inp.dataset.max)})`, 'error');
-            return;
+            inp.focus(); toast(`Quantidade acima do saldo (máx. ${fmtNum(+inp.dataset.max)})`, 'error'); return;
+        }
+        if (v + EPS < parseFloat(inp.dataset.min)) {
+            inp.focus(); toast(`Já foram recebidos ${fmtNum(+inp.dataset.min)} deste item neste pedido`, 'error'); return;
         }
     }
-    const itens = inputs
-        .map(inp => ({ item_id: Number(inp.dataset.item), qtde_pedida: parseFloat(inp.value) || 0 }))
+    const itens = inputs.map(inp => ({ item_id: Number(inp.dataset.item), qtde_pedida: parseNumBR(inp.value) }))
         .filter(i => i.qtde_pedida > 0);
     if (!$('mPedNum').value.trim()) { $('mPedNum').focus(); toast('Informe o número do pedido', 'error'); return; }
     if (!itens.length) { toast('Informe a quantidade de pelo menos um item', 'error'); return; }
-    const d = await fetchJSON('/api/pedidos', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            empenho_id: estado.empenhoId,
-            numero_pedido: $('mPedNum').value.trim(),
-            data_pedido: $('mPedData').value || hoje(),
-            observacoes: $('mPedObs').value.trim(),
-            itens,
-        }),
-    });
-    if (!d.ok) { toast(d.error, 'error'); return; }
-    fecharModal('modalPedido');
-    $('mPedNum').value = $('mPedData').value = $('mPedObs').value = '';
-    toast('Pedido registrado', 'success');
-    abrirDetalhe(estado.empenhoId, { pushUrl: false });
+    const corpo = {
+        empenho_id: estado.empenhoId, numero_pedido: $('mPedNum').value.trim(),
+        data_pedido: $('mPedData').value || hoje(), prazo_dias: $('mPedPrazo').value,
+        observacoes: $('mPedObs').value.trim(), itens,
+    };
+    const ed = estado.pedidoEditando;
+    const d = await acao(ed ? enviarJSON(`/api/pedidos/${ed.pedido.id}`, 'PUT', corpo) : enviarJSON('/api/pedidos', 'POST', corpo),
+        ed ? 'Pedido atualizado' : 'Pedido registrado');
+    if (d) fecharModal('modalPedido');
+}
+
+async function encerrarPedido(id, reabrir) {
+    const msg = reabrir
+        ? 'Reabrir este pedido? O que falta entregar volta a ser reservado.'
+        : 'Encerrar este pedido?\n\nUse quando o fornecedor não vai entregar o restante. O que faltava volta ao "saldo a pedir" e o pedido deixa de contar como atrasado.';
+    if (!confirm(msg)) return;
+    await acao(enviarJSON(`/api/pedidos/${id}/encerrar`, 'POST', { reabrir }), reabrir ? 'Pedido reaberto' : 'Pedido encerrado');
 }
 
 async function excluirPedido(id) {
-    if (!confirm('Excluir este pedido? Os recebimentos (NFs) dele também saem.')) return;
-    try {
-        const d = await fetchJSON(`/api/pedidos/${id}`, { method: 'DELETE' });
-        if (!d.ok) { toast(d.error, 'error'); return; }
-        toast('Pedido excluído', 'success');
-        abrirDetalhe(estado.empenhoId, { pushUrl: false });
-    } catch (err) { toast(err.message, 'error'); }
+    if (!confirm('Excluir este pedido?\nAs NFs dele também saem (vão para a lixeira).')) return;
+    await acao(enviarJSON(`/api/pedidos/${id}`, 'DELETE'), 'Pedido enviado para a lixeira');
 }
 
-// ---------- PDF do pedido ----------
 function baixarPdf(id) {
     window.open(`/api/pedidos/${id}/pdf`, '_blank');
 }
 
-// ---------- Ver NFs do pedido ----------
+// =====================================================================
+// NFs: ver, registrar, corrigir, excluir
+// =====================================================================
 async function verNfs(id) {
     let d;
-    try { d = await fetchJSON(`/api/pedidos/${id}`); }
-    catch (err) { toast(err.message, 'error'); return; }
+    try { d = await fetchJSON(`/api/pedidos/${id}`); } catch (err) { toast(err.message, 'error'); return; }
     if (!d.ok) { toast(d.error, 'error'); return; }
-
-    const info = d.pedido;
-    $('nfPedidoInfo').innerHTML = `
-        <strong>Pedido ${esc(info.numero_pedido)}</strong> •
-        Empenho ${esc(d.empenho ? d.empenho.ne : '—')} •
-        ${esc(d.empenho ? d.empenho.nome_credor : '—')}`;
-
-    const nfs = d.recebimentos;
-    $('nfCorpo').innerHTML = nfs.length ? nfs.map(nf => `
+    estado.pedidoAtual = d;
+    $('nfPedidoInfo').innerHTML = `<strong>Pedido ${esc(d.pedido.numero_pedido)}</strong> • Empenho ${esc(d.empenho ? d.empenho.ne : '—')} • ${esc(d.empenho ? d.empenho.nome_credor : '—')}`;
+    $('nfCorpo').innerHTML = d.recebimentos.length ? d.recebimentos.map((nf, idx) => `
         <div class="nf-card">
             <div class="nf-head">
                 <span style="font-size:18px">🧾</span>
-                <div>
+                <div class="nf-title">
                     <strong>NF ${esc(nf.nf)}</strong>
-                    <span class="muted"> • ${esc(nf.data_recebimento || '—')}</span>
+                    <span class="muted"> • ${dataBR(nf.data_recebimento) || '—'} • liquidado ${fmtMoney(nf.valor)}</span>
+                </div>
+                <div class="nf-acoes">
+                    <button class="btn btn-sm btn-secondary" onclick="abrirCorrecaoNf(${idx})">✏️ Corrigir</button>
+                    <button class="btn btn-sm btn-danger" onclick="excluirNf(${idx})" aria-label="Excluir NF">🗑</button>
                 </div>
             </div>
-            ${nf.observacoes ? `<div class="muted" style="font-size:12px">Obs.: ${esc(nf.observacoes)}</div>` : ''}
+            ${nf.observacoes ? `<div class="muted small">Obs.: ${esc(nf.observacoes)}</div>` : ''}
             <table class="nf-table">
-                <thead><tr><th>Item</th><th>Descrição</th><th>Und</th><th class="num">Qtde</th></tr></thead>
-                <tbody>
-                    ${nf.itens.map(i => `
-                        <tr>
-                            <td>${esc(i.numero_item)}</td>
-                            <td>${esc(i.descricao)}</td>
-                            <td>${esc(i.und)}</td>
-                            <td class="num">${fmtNum(i.qtde_recebida)}</td>
-                        </tr>`).join('')}
+                <thead><tr><th>Item</th><th>Descrição</th><th>Und</th><th class="num">Qtde</th><th class="num">Valor</th></tr></thead>
+                <tbody>${nf.itens.map(i => `
+                    <tr><td>${esc(i.numero_item)}</td><td>${esc(i.descricao)}</td><td>${esc(i.und)}</td>
+                        <td class="num">${fmtNum(i.qtde_recebida)}</td><td class="num">${fmtMoney(i.qtde_recebida * i.valor_unitario)}</td></tr>`).join('')}
                 </tbody>
             </table>
         </div>`).join('') : '<p class="muted">Nenhuma NF registrada para este pedido.</p>';
-
     abrirModal('modalNfs');
 }
 
-// ---------- Recebimento ----------
-// Só lista os itens DO PEDIDO e limita cada um ao que ainda falta chegar
-// (pedido − já recebido neste pedido, sem passar do saldo físico do item).
-function montarRecebItens(itens) {
-    const box = $('rItens');
-    const pendentes = itens.filter(i => i.pendente > EPS);
-    box.innerHTML = itens.map(i => {
-        const fechado = i.pendente <= EPS;
+/** Monta o formulário de recebimento. Na correção de NF, as quantidades dela voltam ao "pendente". */
+function montarRecebItens(d, nf = null) {
+    const naNf = {};
+    if (nf) nf.itens.forEach(i => { naNf[i.item_id] = (naNf[i.item_id] || 0) + i.qtde_recebida; });
+    const linhas = d.itens.map(i => {
+        const devolve = naNf[i.item_id] || 0;
+        const pendente = nf
+            ? Math.max(0, Math.min(i.qtde_pedida - i.qtde_recebida + devolve, i.saldo_fisico + devolve))
+            : i.pendente;
+        return { i, pendente, atual: devolve };
+    });
+    const temPendente = linhas.some(l => l.pendente > EPS);
+    $('rItens').innerHTML = (temPendente ? '' : '<p class="muted">Todos os itens deste pedido já foram recebidos.</p>') + linhas.map(({ i, pendente, atual }) => {
+        const fechado = pendente <= EPS;
         return `
         <div class="ped-item ${fechado ? 'is-done' : ''}">
-            <label for="rec-${i.item_id}">
-                ${esc(i.numero_item)} • ${esc(i.descricao)}
-                <span class="muted">— pedido ${fmtNum(i.qtde_pedida)} ${esc(i.und)}, já recebido ${fmtNum(i.qtde_recebida)}</span>
-            </label>
-            ${fechado
-                ? '<span class="badge ok">Recebido por completo</span>'
-                : `<div class="input-hint">
-                       <input id="rec-${i.item_id}" type="number" step="any" min="0" max="${i.pendente}"
-                              placeholder="Qtde recebida" data-item="${i.item_id}" data-max="${i.pendente}">
-                       <button type="button" class="btn btn-sm btn-secondary" onclick="this.previousElementSibling.value='${i.pendente}'">Tudo (${fmtNum(i.pendente)})</button>
-                   </div>`}
+            <label for="rec-${i.item_id}">${esc(i.numero_item)} • ${esc(i.descricao)}
+                <span class="muted">— pedido ${fmtNum(i.qtde_pedida)} ${esc(i.und)}, já recebido ${fmtNum(i.qtde_recebida - atual)}</span></label>
+            ${fechado ? '<span class="badge ok">Recebido por completo</span>' : `
+            <div class="input-hint">
+                <input id="rec-${i.item_id}" type="text" inputmode="decimal" placeholder="Qtde recebida" data-item="${i.item_id}"
+                       data-max="${pendente}" data-vu="${i.valor_unitario}" value="${atual ? numParaCampo(atual) : ''}">
+                <button type="button" class="btn btn-sm btn-secondary" data-tudo="${pendente}">Tudo (${fmtNum(pendente)})</button>
+            </div>`}
         </div>`;
     }).join('');
-    $('btnSalvarRecebimento').disabled = !pendentes.length;
-    if (!pendentes.length) box.insertAdjacentHTML('afterbegin', '<p class="muted">Todos os itens deste pedido já foram recebidos.</p>');
+    $('rItens').querySelectorAll('[data-tudo]').forEach(b => b.addEventListener('click', () => {
+        b.previousElementSibling.value = numParaCampo(b.dataset.tudo); totalRecebimento();
+    }));
+    $('rItens').querySelectorAll('input[data-item]').forEach(inp => inp.addEventListener('input', totalRecebimento));
+    totalRecebimento();
+    $('btnSalvarRecebimento').disabled = !temPendente;
+}
+
+function totalRecebimento() {
+    let t = 0;
+    document.querySelectorAll('#rItens input[data-item]').forEach(inp => { t += parseNumBR(inp.value) * parseFloat(inp.dataset.vu || 0); });
+    $('rTotal').textContent = fmtMoney(t);
 }
 
 async function abrirRecebimento(pedidoId) {
     let d;
-    try { d = await fetchJSON(`/api/pedidos/${pedidoId}`); }
-    catch (err) { toast(err.message, 'error'); return; }
+    try { d = await fetchJSON(`/api/pedidos/${pedidoId}`); } catch (err) { toast(err.message, 'error'); return; }
     if (!d.ok) { toast(d.error, 'error'); return; }
-    $('rPedInfo').innerHTML = `<strong>${esc(d.pedido.numero_pedido)}</strong> — preencha a NF e as quantidades que chegaram.`;
-    $('rNf').value = '';
-    $('rData').value = hoje();
-    estado.pedidoAtual = pedidoId;
-    estado.recebItens = d.itens;
-    montarRecebItens(d.itens);
+    estado.pedidoAtual = d;
+    estado.nfEditando = null;
+    $('recTitulo').textContent = 'Registrar Recebimento';
+    $('btnSalvarRecebimento').textContent = 'Registrar Recebimento';
+    $('rPedInfo').innerHTML = `<strong>Pedido ${esc(d.pedido.numero_pedido)}</strong> — informe a NF e as quantidades que chegaram.`;
+    $('rNf').value = ''; $('rObs').value = ''; $('rData').value = hoje();
+    montarRecebItens(d);
+    abrirModal('modalReceber');
+}
+
+function abrirCorrecaoNf(idx) {
+    const d = estado.pedidoAtual, nf = d.recebimentos[idx];
+    estado.nfEditando = nf;
+    fecharModal('modalNfs');
+    $('recTitulo').textContent = `Corrigir NF ${nf.nf}`;
+    $('btnSalvarRecebimento').textContent = 'Salvar Correção';
+    $('rPedInfo').innerHTML = `<strong>Pedido ${esc(d.pedido.numero_pedido)}</strong> — ajuste número, data ou quantidades. Deixe em branco os itens que não vieram nesta NF.`;
+    $('rNf').value = nf.nf === '—' ? '' : nf.nf;
+    $('rData').value = (nf.data_recebimento || '').slice(0, 10);
+    $('rObs').value = nf.observacoes || '';
+    montarRecebItens(d, nf);
+    $('btnSalvarRecebimento').disabled = false;
     abrirModal('modalReceber');
 }
 
 async function salvarRecebimento() {
-    const pedidoId = estado.pedidoAtual;
+    const d = estado.pedidoAtual;
     const nf = $('rNf').value.trim();
     if (!nf) { $('rNf').focus(); toast('Informe o número da NF', 'error'); return; }
     const inputs = [...document.querySelectorAll('#rItens input[data-item]')];
     for (const inp of inputs) {
-        const v = parseFloat(inp.value) || 0;
+        const v = parseNumBR(inp.value);
         if (v < 0 || v > parseFloat(inp.dataset.max) + EPS) {
-            inp.focus();
-            toast(`Quantidade acima do que falta receber (máx. ${fmtNum(+inp.dataset.max)})`, 'error');
-            return;
+            inp.focus(); toast(`Quantidade acima do que falta receber (máx. ${fmtNum(+inp.dataset.max)})`, 'error'); return;
         }
     }
-    const itens = inputs
-        .map(inp => ({ item_id: Number(inp.dataset.item), qtde_recebida: parseFloat(inp.value) || 0 }))
+    const itens = inputs.map(inp => ({ item_id: Number(inp.dataset.item), qtde_recebida: parseNumBR(inp.value) }))
         .filter(i => i.qtde_recebida > 0);
     if (!itens.length) { toast('Preencha ao menos uma quantidade recebida', 'error'); return; }
-    const d = await fetchJSON(`/api/pedidos/${pedidoId}/receber`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nf, data_recebimento: $('rData').value, itens }),
-    });
-    if (!d.ok) { toast(d.error, 'error'); return; }
-    fecharModal('modalReceber');
-    toast(`NF ${d.nf} registrada. Saldo atualizado!`, 'success');
-    abrirDetalhe(estado.empenhoId, { pushUrl: false });
+    const corpo = { nf, data_recebimento: $('rData').value, observacoes: $('rObs').value.trim(), itens };
+    let r;
+    if (estado.nfEditando) {
+        r = await acao(enviarJSON(`/api/pedidos/${d.pedido.id}/nfs`, 'PUT', { ...corpo, ids: estado.nfEditando.ids }), 'NF corrigida');
+    } else {
+        r = await acao(enviarJSON(`/api/pedidos/${d.pedido.id}/receber`, 'POST', corpo), null);
+        if (r) toast(`NF ${r.nf} registrada — ${fmtMoney(r.valor)} liquidado`, 'success');
+    }
+    if (r) fecharModal('modalReceber');
 }
 
-// ---------- Init ----------
+async function excluirNf(idx) {
+    const d = estado.pedidoAtual, nf = d.recebimentos[idx];
+    if (!confirm(`Excluir a NF ${nf.nf} (${fmtMoney(nf.valor)})?\nO saldo dos itens volta e o valor deixa de constar como liquidado.`)) return;
+    const r = await acao(enviarJSON(`/api/pedidos/${d.pedido.id}/nfs/excluir`, 'POST', { ids: nf.ids }), `NF ${nf.nf} enviada para a lixeira`);
+    if (r) {
+        fecharModal('modalNfs');
+        const p = estado.pedidos.find(x => x.id === d.pedido.id);
+        if (p && p.qt_recebimentos > 0) verNfs(d.pedido.id);
+    }
+}
+
+// =====================================================================
+// PAGAMENTOS (OB)
+// =====================================================================
+function abrirPagamento() {
+    const f = estado.financeiro;
+    $('pagInfo').innerHTML = `Liquidado <strong>${fmtMoney(f.liquidado)}</strong> · já pago ${fmtMoney(f.pago)} · <strong class="text-amber">a pagar ${fmtMoney(f.a_pagar)}</strong>`;
+    $('pgOb').value = ''; $('pgValor').value = ''; $('pgNf').value = ''; $('pgObs').value = ''; $('pgData').value = hoje();
+    abrirModal('modalPagamento');
+}
+
+async function salvarPagamento() {
+    const valor = parseNumBR($('pgValor').value);
+    if (!$('pgOb').value.trim()) { $('pgOb').focus(); toast('Informe o número da OB', 'error'); return; }
+    if (!(valor > 0)) { $('pgValor').focus(); toast('Informe o valor pago', 'error'); return; }
+    if (valor > estado.financeiro.a_pagar + 0.005) { toast(`Valor acima do que falta pagar (${fmtMoney(estado.financeiro.a_pagar)})`, 'error'); return; }
+    const d = await acao(enviarJSON(`/api/empenhos/${estado.empenhoId}/pagamentos`, 'POST', {
+        ob: $('pgOb').value.trim(), valor, data_pagamento: $('pgData').value,
+        nf: $('pgNf').value.trim(), observacoes: $('pgObs').value.trim(),
+    }), 'Pagamento registrado');
+    if (d) fecharModal('modalPagamento');
+}
+
+async function excluirPagamento(id) {
+    const p = estado.pagamentos.find(x => x.id === id);
+    if (!confirm(`Excluir o pagamento OB ${p ? p.ob : ''} (${fmtMoney(p ? p.valor : 0)})?`)) return;
+    await acao(enviarJSON(`/api/pagamentos/${id}`, 'DELETE'), 'Pagamento enviado para a lixeira');
+}
+
+// =====================================================================
+// INIT
+// =====================================================================
 function rotaAtual() {
     const id = parseInt(new URLSearchParams(location.search).get('id'), 10);
     if (id) {
         abrirDetalhe(id, { pushUrl: false });
-        // KPIs do topo também aparecem quando se abre um empenho direto pelo link
         fetchJSON('/api/stats_empenhos').then(renderKpis).catch(err => toast(err.message, 'error'));
     } else {
         voltarLista({ pushUrl: false });
@@ -485,16 +803,39 @@ function rotaAtual() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    $('btnNew').addEventListener('click', () => abrirModal('modalEmpenho'));
-    $('btnSalvarEmpenho').addEventListener('click', e => comBotao(e.currentTarget, criarEmpenho));
+    $('btnNew').addEventListener('click', () => abrirModalEmpenho(false));
+    $('btnEditarEmpenho').addEventListener('click', () => abrirModalEmpenho(true));
+    $('btnSalvarEmpenho').addEventListener('click', e => comBotao(e.currentTarget, salvarEmpenho));
     $('btnAddItem').addEventListener('click', () => abrirTabelaItens());
     $('btnAddLinha').addEventListener('click', () => criarLinha());
     $('btnSalvarItem').addEventListener('click', e => comBotao(e.currentTarget, salvarItem));
-    $('btnNovoPedido').addEventListener('click', () => { montarPedItens(); abrirModal('modalPedido'); });
+    $('btnImportar').addEventListener('click', () => executarImportacao($('txtImportar').value));
+    $('txtImportar').addEventListener('paste', () => setTimeout(() => executarImportacao($('txtImportar').value), 0));
+    $('fileImportar').addEventListener('change', async e => {
+        const f = e.target.files[0]; if (!f) return;
+        const buf = await f.arrayBuffer();
+        let txt = new TextDecoder('utf-8').decode(buf);
+        if (txt.includes('�')) txt = new TextDecoder('windows-1252').decode(buf); // CSV salvo pelo Excel
+        executarImportacao(txt);
+        e.target.value = '';
+    });
+    document.querySelectorAll('input[name=movTipo]').forEach(r => r.addEventListener('change', previewMovimento));
+    $('movQtde').addEventListener('input', previewMovimento);
+    $('btnSalvarMov').addEventListener('click', e => comBotao(e.currentTarget, salvarMovimento));
+    $('btnNovoPedido').addEventListener('click', abrirNovoPedido);
+    $('mPedData').addEventListener('input', atualizarVencimento);
+    $('mPedPrazo').addEventListener('input', atualizarVencimento);
     $('btnSalvarPedido').addEventListener('click', e => comBotao(e.currentTarget, salvarPedido));
     $('btnSalvarRecebimento').addEventListener('click', e => comBotao(e.currentTarget, salvarRecebimento));
+    $('btnNovoPagamento').addEventListener('click', abrirPagamento);
+    $('pgTudo').addEventListener('click', () => { $('pgValor').value = estado.financeiro.a_pagar.toFixed(2).replace('.', ','); });
+    $('btnSalvarPagamento').addEventListener('click', e => comBotao(e.currentTarget, salvarPagamento));
     $('btnVoltar').addEventListener('click', () => voltarLista());
     $('btnExcluirEmpenho').addEventListener('click', () => apagarEmpenho(estado.empenhoId));
+    $('boxHistorico').addEventListener('toggle', () => { if ($('boxHistorico').open) carregarHistorico(); });
+
+    ['fBusca', 'fSituacao', 'fAno', 'fSaldo'].forEach(id => $(id).addEventListener('input', renderLista));
+    $('btnLimparFiltros').addEventListener('click', limparFiltros);
 
     ativarOrdenacao($('tblEmpenhos'), estado.sortLista, renderLista);
     ativarOrdenacao($('tblItens'), estado.sortItens, renderItens);

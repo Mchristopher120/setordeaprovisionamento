@@ -1,10 +1,10 @@
-// Utilitários compartilhados pelo Dashboard e pela tela de Empenhos.
+// Utilitários compartilhados pelas telas (Dashboard, Empenhos, Histórico).
 
 const fmtMoney = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 const fmtMoneyCurto = (v) => new Intl.NumberFormat('pt-BR', {
     style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1,
 }).format(v || 0);
-const fmtNum = (v) => new Intl.NumberFormat('pt-BR').format(v ?? 0);
+const fmtNum = (v) => new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(v ?? 0);
 const escapeHTML = (str) => String(str ?? '').replace(/[&<>"']/g, m => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 }[m]));
@@ -14,6 +14,33 @@ function pct(v) {
     return `${(parseFloat(v) || 0).toFixed(1).replace('.', ',')}%`;
 }
 
+/** '2026-08-12' -> '12/08/2026' (e '2026-08-12 10:30:00' -> '12/08/2026 10:30') */
+function dataBR(s) {
+    if (!s) return '';
+    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+    if (!m) return String(s);
+    return `${m[3]}/${m[2]}/${m[1]}` + (m[4] ? ` ${m[4]}:${m[5]}` : '');
+}
+
+/**
+ * Converte o que a pessoa digitou em número, aceitando os dois jeitos:
+ *   '1.234,56' -> 1234.56   '22,5' -> 22.5   '22.50' -> 22.5   '1.000' -> 1000
+ * (Antes, '22.50' virava 2250 porque todo ponto era tratado como milhar.)
+ */
+function parseNumBR(v) {
+    if (typeof v === 'number') return v;
+    let s = String(v ?? '').trim().replace(/R\$|\s/g, '');
+    if (!s) return 0;
+    if (s.includes(',')) {
+        s = s.replace(/\./g, '').replace(',', '.');
+    } else if (s.includes('.')) {
+        const umPontoDecimal = (s.match(/\./g) || []).length === 1 && /\.\d{1,2}$/.test(s);
+        if (!umPontoDecimal) s = s.replace(/\./g, '');
+    }
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+}
+
 /** Cor do percentual executado: verde (>=90), âmbar (>=50), vermelho. */
 function corPct(v) {
     if (v >= 90) return 'var(--green)';
@@ -21,17 +48,17 @@ function corPct(v) {
     return 'var(--red)';
 }
 
-/** Célula "% Pago" com mini barra de progresso. */
-function pctCell(v) {
+/** Célula de % com mini barra de progresso. */
+function pctCell(v, rotulo = 'liquidado') {
     const p = Math.min(100, Math.max(0, parseFloat(v) || 0));
-    return `<div class="pct-cell" title="${pct(v)} pago">
+    return `<div class="pct-cell" title="${pct(v)} ${rotulo}">
         <span class="pct-num">${pct(v)}</span>
         <span class="progress"><span style="width:${p}%;background:${corPct(p)}"></span></span>
     </div>`;
 }
 
-/** fetch que lança erro legível quando a API responde com falha
- *  (ex.: banco Neon "dormindo" -> 500 com {mensagem}). */
+/** fetch que lança erro legível quando a API falha (ex.: banco Neon dormindo)
+ *  e manda para o login quando a sessão expira. */
 async function fetchJSON(url, opts) {
     let res;
     try {
@@ -41,10 +68,22 @@ async function fetchJSON(url, opts) {
     }
     let data = null;
     try { data = await res.json(); } catch { /* corpo não-JSON */ }
+    if (res.status === 401) {
+        location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+        throw new Error('Sessão expirada. Entre novamente.');
+    }
     if (!res.ok && !(data && 'ok' in data)) {
         throw new Error((data && (data.mensagem || data.error)) || `Erro ${res.status} ao carregar dados.`);
     }
     return data;
+}
+
+/** POST/PUT/DELETE com JSON. */
+function enviarJSON(url, metodo, corpo) {
+    return fetchJSON(url, {
+        method: metodo, headers: { 'Content-Type': 'application/json' },
+        body: corpo === undefined ? undefined : JSON.stringify(corpo),
+    });
 }
 
 // ---------- Toast ----------
@@ -54,7 +93,7 @@ function showToast(msg, type = '') {
     t.textContent = msg;
     t.className = `toast show ${type}`;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.className = 'toast', 3500);
+    toastTimer = setTimeout(() => t.className = 'toast', type === 'error' ? 5000 : 3500);
 }
 
 // ---------- Ordenação de tabelas ----------
@@ -90,3 +129,6 @@ function ativarOrdenacao(table, sortState, onChange) {
 function linhaCarregando(colspan) {
     return `<tr><td colspan="${colspan}" class="loading-row"><span class="spinner"></span> Carregando…</td></tr>`;
 }
+
+/** Remove acentos e caixa para busca. */
+const normalizar = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();

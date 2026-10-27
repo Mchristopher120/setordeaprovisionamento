@@ -7,29 +7,30 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <header class="topbar">
-        <div class="brand">
-            <span class="logo">📦</span>
-            <div>
-                <h1>Empenhos, Pedidos &amp; Recebimentos</h1>
-                <p class="sub">Cadastro por item • Saldo físico • Recebimentos (NF)</p>
-            </div>
-        </div>
-        <div class="topbar-actions">
-            <a href="/" class="btn btn-ghost" title="Voltar ao dashboard">📊 Dashboard</a>
-            <button id="btnNew" class="btn btn-primary">＋ Novo Empenho</button>
-        </div>
-    </header>
+    {% set pagina = 'empenhos' %}{% set icone = '📦' %}{% set titulo = 'Empenhos, Pedidos & Recebimentos' %}{% set subtitulo = 'Cadastro por item • Liquidação (NF) • Pagamento (OB)' %}
+    {% include '_topbar.html' %}
 
     <main class="container">
-        <!-- KPIs do módulo -->
         <section class="kpis" id="kpis"></section>
 
         <!-- LISTA DE EMPENHOS -->
         <section class="card table-card" id="secLista">
             <div class="table-head">
-                <h3>Empenhos</h3>
-                <span class="count-badge" id="countBadge">0 empenhos</span>
+                <h3>Empenhos <span class="count-badge" id="countBadge">0 empenhos</span></h3>
+                <button id="btnNew" class="btn btn-primary">＋ Novo Empenho</button>
+            </div>
+            <div class="toolbar" role="search">
+                <input type="search" id="fBusca" class="input" placeholder="Buscar por NE, credor ou processo…" aria-label="Buscar">
+                <select id="fSituacao" class="input" aria-label="Situação">
+                    <option value="">Todas as situações</option>
+                    <option value="ANDAMENTO">Em andamento</option>
+                    <option value="CONCLUIDO">Concluídos</option>
+                    <option value="SEM_ITENS">Sem itens</option>
+                    <option value="ATRASO">Com pedido atrasado</option>
+                </select>
+                <select id="fAno" class="input" aria-label="Ano"><option value="">Todos os anos</option></select>
+                <label class="check"><input type="checkbox" id="fSaldo"> Só com saldo a liquidar</label>
+                <button id="btnLimparFiltros" class="btn btn-link btn-sm" hidden>Limpar filtros</button>
             </div>
             <div class="table-wrap">
                 <table id="tblEmpenhos">
@@ -38,10 +39,11 @@
                             <th data-key="ne">NE</th>
                             <th data-key="nome_credor">Credor</th>
                             <th data-key="processo">Processo</th>
-                            <th data-key="valor_empenhado" data-default="desc">Valor Empenhado</th>
+                            <th data-key="valor_empenhado" data-default="desc">Empenhado</th>
+                            <th data-key="valor_liquidado" data-default="desc">Liquidado</th>
                             <th data-key="valor_pago" data-default="desc">Pago</th>
                             <th data-key="a_liquidar" data-default="desc">A Liquidar</th>
-                            <th data-key="percentual_pago" data-default="desc">% Pago</th>
+                            <th data-key="percentual_liquidado" data-default="desc">% Liquidado</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -59,13 +61,13 @@
                     <div id="detResumo" class="chips"></div>
                 </div>
                 <div class="detail-actions">
-                    <button id="btnExcluirEmpenho" class="btn btn-danger">🗑 Apagar Empenho</button>
-                    <button id="btnAddItem" class="btn btn-secondary">＋ Incluir Itens</button>
+                    <button id="btnEditarEmpenho" class="btn btn-secondary">✏️ Editar</button>
+                    <button id="btnExcluirEmpenho" class="btn btn-danger">🗑 Apagar</button>
+                    <button id="btnAddItem" class="btn btn-secondary">＋ Itens</button>
                     <button id="btnNovoPedido" class="btn btn-primary">＋ Fazer Pedido</button>
                 </div>
             </div>
 
-            <!-- Itens -->
             <h4>Itens do Empenho</h4>
             <div class="table-wrap">
                 <table id="tblItens">
@@ -74,29 +76,32 @@
                             <th data-key="numero_item">Item</th>
                             <th data-key="descricao">Descrição</th>
                             <th data-key="und">Und</th>
-                            <th data-key="qtde_empenhada" data-default="desc">Qtde Empenhada</th>
+                            <th data-key="qtde_empenhada" data-default="desc">Qtde</th>
                             <th data-key="valor_unitario" data-default="desc">Valor Unit.</th>
                             <th data-key="valor_total" data-default="desc">Valor Total</th>
                             <th data-key="qtde_recebida" data-default="desc">Recebido</th>
-                            <th data-key="saldo_fisico" data-default="desc">Saldo Físico</th>
-                            <th data-key="pago" data-default="desc">Pago</th>
-                            <th data-key="a_liquidar" data-default="desc">A Liquidar</th>
-                            <th data-key="percentual_pago" data-default="desc">% Pago</th>
+                            <th data-key="saldo_fisico" data-default="desc" title="Empenhado − recebido">Saldo Físico</th>
+                            <th data-key="saldo_a_pedir" data-default="desc" title="Empenhado − recebido − pedido em aberto">Saldo a Pedir</th>
+                            <th data-key="liquidado" data-default="desc">Liquidado</th>
+                            <th data-key="percentual_liquidado" data-default="desc">% Liq.</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody id="tbodyItens"></tbody>
                 </table>
             </div>
+            <div id="secMovimentos" class="mt-small"></div>
 
-            <!-- Pedidos -->
-            <h4 class="mt-section">Pedidos</h4>
+            <div class="section-head mt-section">
+                <h4>Pedidos</h4>
+            </div>
             <div class="table-wrap">
                 <table id="tblPedidos">
                     <thead>
                         <tr>
                             <th data-key="numero_pedido">Pedido</th>
                             <th data-key="data_pedido" data-default="desc">Data</th>
+                            <th data-key="vencimento">Entrega até</th>
                             <th data-key="qt_itens" data-default="desc">Itens</th>
                             <th data-key="qtde_total_pedida" data-default="desc">Qtde Pedida</th>
                             <th data-key="qtde_total_recebida" data-default="desc">Qtde Recebida</th>
@@ -107,19 +112,37 @@
                     <tbody id="tbodyPedidos"></tbody>
                 </table>
             </div>
+
+            <div class="section-head mt-section">
+                <h4>Pagamentos (OB)</h4>
+                <button id="btnNovoPagamento" class="btn btn-secondary btn-sm">＋ Registrar Pagamento</button>
+            </div>
+            <div class="table-wrap">
+                <table id="tblPagamentos">
+                    <thead>
+                        <tr><th>OB</th><th>Data</th><th>Valor</th><th>NF</th><th>Observações</th><th></th></tr>
+                    </thead>
+                    <tbody id="tbodyPagamentos"></tbody>
+                </table>
+            </div>
+
+            <details class="historico-box mt-section" id="boxHistorico">
+                <summary>🕘 Histórico deste empenho</summary>
+                <ul class="timeline" id="listaHistorico"></ul>
+            </details>
         </section>
     </main>
 
-    <!-- MODAL NOVO EMPENHO -->
+    <!-- MODAL EMPENHO (novo / editar) -->
     <div class="modal" id="modalEmpenho">
-        <div role="dialog" aria-modal="true" class="modal-box">
-            <h3>Novo Empenho</h3>
+        <div role="dialog" aria-modal="true" aria-labelledby="empModalTitulo" class="modal-box">
+            <h3 id="empModalTitulo">Novo Empenho</h3>
             <div class="modal-body">
-                <label>NE (Nota de Empenho) *</label>
+                <label for="mNe">NE (Nota de Empenho) *</label>
                 <input type="text" id="mNe" placeholder="ex: 2026NE000012">
-                <label>Processo</label>
+                <label for="mProcesso">Processo</label>
                 <input type="text" id="mProcesso" placeholder="Nº do processo (opcional)">
-                <label>Credor *</label>
+                <label for="mCredor">Credor *</label>
                 <input type="text" id="mCredor" placeholder="Nome do fornecedor">
             </div>
             <div class="modal-actions">
@@ -129,12 +152,24 @@
         </div>
     </div>
 
-    <!-- MODAL ITENS (tabelinha: vários itens na mesma inclusão) -->
+    <!-- MODAL ITENS (vários itens na mesma inclusão) -->
     <div class="modal" id="modalItem">
-        <div role="dialog" aria-modal="true" class="modal-box modal-large">
+        <div role="dialog" aria-modal="true" aria-labelledby="itemModalTitulo" class="modal-box modal-xl">
             <h3 id="itemModalTitulo">Incluir Itens</h3>
             <div class="modal-body">
-                <div id="itemTableWrap" class="table-wrap">
+                <div id="boxImportar" class="import-box">
+                    <div class="import-head">
+                        <strong>📋 Importar da planilha</strong>
+                        <span class="muted">Copie as linhas no Excel (Item, Descrição, Und, Qtde, Valor unit.) e cole abaixo, ou escolha um arquivo .csv.</span>
+                    </div>
+                    <textarea id="txtImportar" rows="3" placeholder="Cole aqui as linhas copiadas do Excel…"></textarea>
+                    <div class="import-actions">
+                        <label class="btn btn-secondary btn-sm file-btn">📄 Arquivo .csv<input type="file" id="fileImportar" accept=".csv,.txt" hidden></label>
+                        <button id="btnImportar" type="button" class="btn btn-secondary btn-sm">Adicionar à lista</button>
+                        <span id="importMsg" class="muted small"></span>
+                    </div>
+                </div>
+                <div class="table-wrap">
                     <table id="tblItemEdit">
                         <thead>
                             <tr>
@@ -142,7 +177,7 @@
                                 <th>Descrição *</th>
                                 <th style="width:80px">Und</th>
                                 <th style="width:110px">Qtde</th>
-                                <th style="width:120px">Valor Unit. (R$)</th>
+                                <th style="width:130px">Valor Unit. (R$)</th>
                                 <th style="width:40px"></th>
                             </tr>
                         </thead>
@@ -151,7 +186,7 @@
                 </div>
                 <button id="btnAddLinha" class="btn btn-secondary btn-sm" style="align-self:flex-start">＋ Adicionar linha</button>
                 <div id="itemTotalBox" class="item-total">Total: <strong id="itemTotal">R$ 0,00</strong></div>
-                <p class="muted" id="itemEditHint" style="font-size:12px">Preencha cada linha e clique em Salvar. Itens em branco são ignorados.</p>
+                <p class="muted small" id="itemEditHint">Preencha cada linha e clique em Salvar. Linhas em branco são ignoradas.</p>
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" data-close>Cancelar</button>
@@ -160,18 +195,56 @@
         </div>
     </div>
 
-    <!-- MODAL PEDIDO -->
-    <div class="modal" id="modalPedido">
-        <div role="dialog" aria-modal="true" class="modal-box modal-large">
-            <h3>Novo Pedido</h3>
+    <!-- MODAL REFORÇO / ANULAÇÃO -->
+    <div class="modal" id="modalMov">
+        <div role="dialog" aria-modal="true" aria-labelledby="movTitulo" class="modal-box">
+            <h3 id="movTitulo">Reforço / Anulação</h3>
             <div class="modal-body">
-                <label>Nº do Pedido *</label>
-                <input type="text" id="mPedNum" placeholder="ex: PED-001">
-                <label>Data solicitada</label>
-                <input type="date" id="mPedData">
-                <label>Observações</label>
-                <input type="text" id="mPedObs" placeholder="ex: pedido parcial (09/09)">
-                <label>Itens solicitados <span class="muted">(até o saldo de cada item)</span></label>
+                <p class="muted" id="movInfo"></p>
+                <div class="seg" role="radiogroup" aria-label="Tipo de movimento">
+                    <label><input type="radio" name="movTipo" value="REFORCO" checked> ＋ Reforço</label>
+                    <label><input type="radio" name="movTipo" value="ANULACAO"> − Anulação</label>
+                </div>
+                <label for="movQtde">Quantidade *</label>
+                <input type="text" id="movQtde" inputmode="decimal" placeholder="ex: 50">
+                <p class="hint" id="movPreview"></p>
+                <label for="movData">Data</label>
+                <input type="date" id="movData">
+                <label for="movDoc">Documento</label>
+                <input type="text" id="movDoc" placeholder="ex: 2026NE000045 (NE de reforço/anulação)">
+                <label for="movObs">Observações</label>
+                <input type="text" id="movObs">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-close>Cancelar</button>
+                <button id="btnSalvarMov" class="btn btn-primary">Registrar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL PEDIDO (novo / editar) -->
+    <div class="modal" id="modalPedido">
+        <div role="dialog" aria-modal="true" aria-labelledby="pedTitulo" class="modal-box modal-large">
+            <h3 id="pedTitulo">Novo Pedido</h3>
+            <div class="modal-body">
+                <div class="form-grid">
+                    <div>
+                        <label for="mPedNum">Nº do Pedido *</label>
+                        <input type="text" id="mPedNum" placeholder="ex: PED-001">
+                    </div>
+                    <div>
+                        <label for="mPedData">Data do pedido</label>
+                        <input type="date" id="mPedData">
+                    </div>
+                    <div>
+                        <label for="mPedPrazo">Prazo de entrega (dias)</label>
+                        <input type="number" id="mPedPrazo" min="0" step="1" value="30">
+                        <span class="hint" id="mPedVenc"></span>
+                    </div>
+                </div>
+                <label for="mPedObs">Observações</label>
+                <input type="text" id="mPedObs" placeholder="ex: entregar no rancho, das 8h às 11h">
+                <label>Itens solicitados <span class="muted">(até o saldo a pedir de cada item)</span></label>
                 <div id="mPedItens"></div>
             </div>
             <div class="modal-actions">
@@ -181,19 +254,27 @@
         </div>
     </div>
 
-    <!-- MODAL RECEBER -->
+    <!-- MODAL RECEBER / CORRIGIR NF -->
     <div class="modal" id="modalReceber">
-        <div role="dialog" aria-modal="true" class="modal-box modal-large">
-            <h3>Registrar Recebimento</h3>
+        <div role="dialog" aria-modal="true" aria-labelledby="recTitulo" class="modal-box modal-large">
+            <h3 id="recTitulo">Registrar Recebimento</h3>
             <div class="modal-body">
-                <label>Pedido</label>
-                <p class="muted" id="rPedInfo" style="margin-bottom:8px"></p>
-                <label>NF (número da nota) *</label>
-                <input type="text" id="rNf" placeholder="ex: 12345">
-                <label>Data do recebimento</label>
-                <input type="date" id="rData">
+                <p class="muted" id="rPedInfo"></p>
+                <div class="form-grid">
+                    <div>
+                        <label for="rNf">NF (número da nota) *</label>
+                        <input type="text" id="rNf" placeholder="ex: 12345">
+                    </div>
+                    <div>
+                        <label for="rData">Data do recebimento</label>
+                        <input type="date" id="rData">
+                    </div>
+                </div>
+                <label for="rObs">Observações</label>
+                <input type="text" id="rObs">
                 <label>Quantidades recebidas</label>
                 <div id="rItens"></div>
+                <div class="item-total">Valor a liquidar nesta NF: <strong id="rTotal">R$ 0,00</strong></div>
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" data-close>Cancelar</button>
@@ -204,12 +285,45 @@
 
     <!-- MODAL VER NFs -->
     <div class="modal" id="modalNfs">
-        <div role="dialog" aria-modal="true" class="modal-box modal-large">
-            <h3>Notas Fiscais</h3>
+        <div role="dialog" aria-modal="true" aria-labelledby="nfsTitulo" class="modal-box modal-large">
+            <h3 id="nfsTitulo">Notas Fiscais</h3>
             <p class="muted" id="nfPedidoInfo" style="margin-bottom:12px"></p>
             <div id="nfCorpo" class="nf-list"></div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" data-close>Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL PAGAMENTO -->
+    <div class="modal" id="modalPagamento">
+        <div role="dialog" aria-modal="true" aria-labelledby="pagTitulo" class="modal-box">
+            <h3 id="pagTitulo">Registrar Pagamento (OB)</h3>
+            <div class="modal-body">
+                <p class="muted" id="pagInfo"></p>
+                <div class="form-grid">
+                    <div>
+                        <label for="pgOb">Nº da OB *</label>
+                        <input type="text" id="pgOb" placeholder="ex: 2026OB000123">
+                    </div>
+                    <div>
+                        <label for="pgData">Data do pagamento</label>
+                        <input type="date" id="pgData">
+                    </div>
+                </div>
+                <label for="pgValor">Valor pago (R$) *</label>
+                <div class="input-hint">
+                    <input type="text" id="pgValor" inputmode="decimal" placeholder="0,00">
+                    <button type="button" id="pgTudo" class="btn btn-sm btn-secondary">Tudo</button>
+                </div>
+                <label for="pgNf">NF(s) referente(s)</label>
+                <input type="text" id="pgNf" placeholder="ex: 4501, 4502">
+                <label for="pgObs">Observações</label>
+                <input type="text" id="pgObs">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-close>Cancelar</button>
+                <button id="btnSalvarPagamento" class="btn btn-primary">Registrar Pagamento</button>
             </div>
         </div>
     </div>

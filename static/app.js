@@ -5,15 +5,16 @@ async function loadAll({ aviso = false } = {}) {
     const erroBox = document.getElementById('erroBox');
     if (!estadoDash.empenhos.length) renderCarregando();
     try {
-        const [empenhos, stats] = await Promise.all([
+        const [empenhos, stats, evolucao] = await Promise.all([
             fetchJSON('/api/empenhos'),
             fetchJSON('/api/stats_empenhos'),
+            fetchJSON('/api/evolucao'),
         ]);
         erroBox.hidden = true;
         estadoDash.empenhos = empenhos;
         renderKPIs(stats);
         renderIndicadores(stats);
-        renderGraficos(stats, empenhos);
+        renderGraficos(stats, empenhos, evolucao);
         renderTable();
         if (aviso) showToast('Dados atualizados', 'success');
     } catch (err) {
@@ -24,79 +25,66 @@ async function loadAll({ aviso = false } = {}) {
             document.getElementById('indGrid').innerHTML = '';
             document.getElementById('tableBody').innerHTML =
                 `<tr><td colspan="8" class="empty">Dados indisponíveis no momento.</td></tr>`;
-            ['chartStatus', 'chartCredores', 'chartEmpenhos'].forEach(id =>
+            ['chartStatus', 'chartAtrasados', 'chartCredores', 'chartEvolucao', 'chartEmpenhos'].forEach(id =>
                 document.getElementById(id).innerHTML = graficoVazio('Dados indisponíveis.'));
         }
     }
 }
 
 function renderCarregando() {
-    document.getElementById('kpis').innerHTML = Array(5).fill('<div class="kpi skeleton"></div>').join('');
+    document.getElementById('kpis').innerHTML = Array(6).fill('<div class="kpi skeleton"></div>').join('');
     document.getElementById('indGrid').innerHTML = Array(4).fill('<div class="ind-card skeleton"></div>').join('');
     document.getElementById('tableBody').innerHTML = linhaCarregando(8);
 }
 
-function renderKPIs(stats) {
+function renderKPIs(s) {
+    const atraso = s.pedidos_atrasados
+        ? `<span class="text-red"><strong>${fmtNum(s.pedidos_atrasados)}</strong> atrasado${s.pedidos_atrasados > 1 ? 's' : ''}</span>`
+        : 'nenhum atrasado';
     document.getElementById('kpis').innerHTML = `
         <div class="kpi accent">
             <div class="kpi-label">Empenhos</div>
-            <div class="kpi-value">${fmtNum(stats.empenhos)}</div>
-            <div class="kpi-sub">${fmtNum(stats.empenhos_concluidos)} concluídos</div>
+            <div class="kpi-value">${fmtNum(s.empenhos)}</div>
+            <div class="kpi-sub">${fmtNum(s.empenhos_concluidos)} concluídos · ${fmtNum(s.itens)} itens</div>
         </div>
-        <div class="kpi warning">
-            <div class="kpi-label">Itens</div>
-            <div class="kpi-value">${fmtNum(stats.itens)}</div>
-            <div class="kpi-sub">${fmtNum(stats.itens_zerados)} recebidos por completo</div>
+        <div class="kpi slate">
+            <div class="kpi-label">Empenhado</div>
+            <div class="kpi-value">${fmtMoney(s.valor_empenhado)}</div>
+            <div class="kpi-sub">Valor total dos itens</div>
+        </div>
+        <div class="kpi teal">
+            <div class="kpi-label">Liquidado</div>
+            <div class="kpi-value">${fmtMoney(s.valor_liquidado)}</div>
+            <div class="kpi-sub">${pct(s.percentual_liquidado)} · a liquidar ${fmtMoneyCurto(s.valor_a_liquidar)}</div>
         </div>
         <div class="kpi green">
-            <div class="kpi-label">Valor Empenhado</div>
-            <div class="kpi-value">${fmtMoney(stats.valor_empenhado)}</div>
-            <div class="kpi-sub">${pct(stats.percentual_pago)} já pago</div>
+            <div class="kpi-label">Pago</div>
+            <div class="kpi-value">${fmtMoney(s.valor_pago)}</div>
+            <div class="kpi-sub">${pct(s.percentual_pago)} do empenhado</div>
         </div>
         <div class="kpi red">
-            <div class="kpi-label">A Liquidar</div>
-            <div class="kpi-value">${fmtMoney(stats.valor_a_liquidar)}</div>
-            <div class="kpi-sub">Saldo financeiro restante</div>
+            <div class="kpi-label">A Pagar</div>
+            <div class="kpi-value">${fmtMoney(s.valor_a_pagar)}</div>
+            <div class="kpi-sub">Liquidado e ainda sem OB</div>
         </div>
         <div class="kpi amber">
             <div class="kpi-label">Pedidos em Aberto</div>
-            <div class="kpi-value">${fmtNum(stats.pedidos_em_aberto)}</div>
-            <div class="kpi-sub">Aguardando recebimento</div>
+            <div class="kpi-value">${fmtNum(s.pedidos_em_aberto)}</div>
+            <div class="kpi-sub">${atraso}</div>
         </div>`;
 }
 
-function renderIndicadores(stats) {
+function renderIndicadores(s) {
     const ind = [
-        {
-            label: 'Pago (Financeiro)',
-            pct: stats.percentual_pago,
-            detail: `${fmtMoney(stats.valor_pago)} de ${fmtMoney(stats.valor_empenhado)}`,
-            color: 'var(--primary)',
-            icone: '💰',
-        },
-        {
-            label: 'Recebido (Físico)',
-            pct: stats.percentual_fisico,
-            detail: `Média de entrega de ${fmtNum(stats.itens_com_qtde)} itens`,
-            color: 'var(--green)',
-            icone: '📦',
-        },
-        {
-            label: 'Itens Recebidos por Completo',
-            pct: stats.percentual_itens_zerados,
-            detail: `${fmtNum(stats.itens_zerados)} de ${fmtNum(stats.itens)} itens`,
-            color: 'var(--warning)',
-            icone: '✅',
-        },
-        {
-            label: 'Empenhos Concluídos',
-            pct: stats.percentual_concluidos,
-            detail: `${fmtNum(stats.empenhos_concluidos)} de ${fmtNum(stats.empenhos)} empenhos`,
-            color: 'var(--amber)',
-            icone: '🏁',
-        },
+        { label: 'Liquidado', pct: s.percentual_liquidado, color: 'var(--liq-strong)', icone: '🧾',
+          detail: `${fmtMoney(s.valor_liquidado)} de ${fmtMoney(s.valor_empenhado)}` },
+        { label: 'Pago', pct: s.percentual_pago, color: 'var(--green)', icone: '💰',
+          detail: `${fmtMoney(s.valor_pago)} de ${fmtMoney(s.valor_empenhado)}` },
+        { label: 'Recebido (Físico)', pct: s.percentual_fisico, color: 'var(--primary)', icone: '📦',
+          detail: `Média de entrega de ${fmtNum(s.itens_com_qtde)} itens · ${fmtNum(s.itens_zerados)} completos` },
+        { label: 'Empenhos Concluídos', pct: s.percentual_concluidos, color: 'var(--amber)', icone: '🏁',
+          detail: `${fmtNum(s.empenhos_concluidos)} de ${fmtNum(s.empenhos)} empenhos` },
     ];
-
     document.getElementById('indGrid').innerHTML = ind.map(i => {
         const p = Math.min(100, Math.max(0, i.pct || 0));
         return `
@@ -114,15 +102,17 @@ function renderIndicadores(stats) {
     }).join('');
 }
 
-function renderGraficos(stats, empenhos) {
+function renderGraficos(stats, empenhos, evolucao) {
     const sp = stats.status_pedidos || {};
     graficoRosca(document.getElementById('chartStatus'), [
-        { label: 'Aguardando (incluído)', value: sp.INCLUIDO || 0, color: 'var(--info)' },
-        { label: 'Recebido parcial', value: sp.PARCIAL || 0, color: 'var(--amber)' },
+        { label: 'Aguardando', value: sp.INCLUIDO || 0, color: 'var(--info)' },
+        { label: 'Parcial', value: sp.PARCIAL || 0, color: 'var(--amber)' },
         { label: 'Recebido', value: sp.RECEBIDO || 0, color: 'var(--green)' },
+        { label: 'Encerrado', value: sp.ENCERRADO || 0, color: 'var(--slate)' },
     ], 'pedidos');
 
-    // Saldo a liquidar agrupado por credor
+    listaAtrasados(document.getElementById('chartAtrasados'), stats.lista_atrasados || [], stats.pedidos_atrasados || 0);
+
     const porCredor = {};
     empenhos.forEach(e => {
         const k = e.nome_credor || '—';
@@ -139,14 +129,17 @@ function renderGraficos(stats, empenhos) {
             sub: `${fmtNum(v.qtd)} empenho${v.qtd > 1 ? 's' : ''}`,
         }));
     graficoRanking(document.getElementById('chartCredores'), credores, 'var(--red)',
-        stats.valor_empenhado > 0 ? 'Nenhum saldo a liquidar. Tudo pago! 🎉' : 'Nenhum valor empenhado ainda.');
+        stats.valor_empenhado > 0 ? 'Nada a liquidar. Tudo entregue! 🎉' : 'Nenhum valor empenhado ainda.');
+
+    graficoEvolucao(document.getElementById('chartEvolucao'), evolucao);
 
     const top = empenhos
         .filter(e => e.valor_empenhado > 0)
         .sort((a, b) => b.valor_empenhado - a.valor_empenhado)
         .slice(0, 8)
-        .map(e => ({ id: e.id, label: e.ne, sub: e.nome_credor, empenhado: e.valor_empenhado, pago: e.valor_pago }));
-    graficoEmpenhadoPago(document.getElementById('chartEmpenhos'), top);
+        .map(e => ({ id: e.id, label: e.ne, sub: e.nome_credor, empenhado: e.valor_empenhado,
+                     liquidado: e.valor_liquidado, pago: e.valor_pago }));
+    graficoExecucao(document.getElementById('chartEmpenhos'), top);
 }
 
 function renderTable() {
@@ -162,16 +155,16 @@ function renderTable() {
         </td></tr>`;
         return;
     }
-
     tbody.innerHTML = empenhos.map(e => `
         <tr>
-            <td><strong>${escapeHTML(e.ne)}</strong></td>
+            <td><strong>${escapeHTML(e.ne)}</strong>
+                ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">⏰ ${e.pedidos_atrasados}</span>` : ''}</td>
             <td>${escapeHTML(e.nome_credor)}</td>
-            <td>${escapeHTML(e.processo)}</td>
             <td class="num money">${fmtMoney(e.valor_empenhado)}</td>
+            <td class="num money text-teal">${fmtMoney(e.valor_liquidado)}</td>
             <td class="num money text-green">${fmtMoney(e.valor_pago)}</td>
             <td class="num money text-red">${fmtMoney(e.a_liquidar)}</td>
-            <td>${pctCell(e.percentual_pago)}</td>
+            <td>${pctCell(e.percentual_liquidado)}</td>
             <td><a href="/empenhos?id=${e.id}" class="btn btn-sm btn-secondary">Abrir</a></td>
         </tr>`).join('');
 }
