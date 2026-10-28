@@ -19,14 +19,16 @@
         document.documentElement.setAttribute('data-tema-pref', pref);
         var btn = document.getElementById('btnTema');
         if (btn) {
+            // O ícone certo aparece via CSS (data-tema-pref); aqui só o texto e a dica
             var info = {
-                auto: ['🖥️', 'Automático', 'Tema automático (segue o sistema). Clique para escuro.'],
-                dark: ['🌙', 'Escuro', 'Tema escuro. Clique para claro.'],
-                light: ['☀️', 'Claro', 'Tema claro. Clique para automático.'],
+                auto: ['Automático', 'Tema automático (segue o sistema). Clique para escuro.'],
+                dark: ['Escuro', 'Tema escuro. Clique para claro.'],
+                light: ['Claro', 'Tema claro. Clique para automático.'],
             }[pref];
-            btn.innerHTML = '<span aria-hidden="true">' + info[0] + '</span><span class="tema-rotulo">' + info[1] + '</span>';
-            btn.title = info[2];
-            btn.setAttribute('aria-label', info[2]);
+            var rotulo = btn.querySelector('.tema-rotulo');
+            if (rotulo) rotulo.textContent = info[0];
+            btn.title = info[1];
+            btn.setAttribute('aria-label', info[1]);
         }
     }
 
