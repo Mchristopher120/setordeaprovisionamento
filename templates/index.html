@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard de Aprovisionamento</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='tema.js') }}"></script>
 </head>
 <body>
-    {% set pagina = 'dashboard' %}{% set icone = '⚙' %}{% set titulo = 'Aprovisionamento' %}{% set subtitulo = 'Gestão de Empenhos & Liquidações' %}
+    {% set pagina = 'dashboard' %}{% set icone = '⚙' %}{% set logo_img = 'img/logistica.png' %}{% set logo_alt = 'Logística do Exército Brasileiro' %}{% set titulo = 'Aprovisionamento' %}{% set subtitulo = 'Gestão de Empenhos & Liquidações' %}
     {% include '_topbar.html' %}
 
     <main class="container">
