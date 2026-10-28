@@ -503,7 +503,8 @@ td.acoes .btn + .btn { margin-left: 6px; }
     display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap;
     padding-bottom: 16px; margin-bottom: 6px; border-bottom: 1px solid var(--border);
 }
-.detail-head h3 { font-size: 20px; margin: 4px 0 10px; }
+.detail-head h3 { font-size: 25px; font-weight: 800; letter-spacing: -.4px; line-height: 1.25; margin: 6px 0 10px; }
+@media (max-width: 560px) { .detail-head h3 { font-size: 21px; } }
 .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
