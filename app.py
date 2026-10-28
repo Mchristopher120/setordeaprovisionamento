@@ -43,6 +43,72 @@ app.secret_key = (
 
 EPS = 1e-9  # tolerância para comparar quantidades em ponto flutuante
 
+# Dados que saem no PDF do pedido. Para mudar quem assina, endereço etc., edite aqui.
+UNIDADE_PDF = {
+    "nome": "3º Centro de Geoinformação",
+    "setor": "Setor de Aprovisionamento",
+    "cidade": "Olinda - PE",
+    "endereco": "Av. Dr. Joaquim Nabuco, 1687 - Ouro Preto, Olinda - PE, 53370-285",
+    "horario": "das 09h30 às 16h00",
+    "email": "aprov3dl@gmail.com",
+    "assinaturas": ["1º Tenente Christopher", "3º Sgt Ítalo"],
+}
+
+MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
+         "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+
+def valor_por_extenso(valor):
+    """1234.5 -> 'mil, duzentos e trinta e quatro reais e cinquenta centavos'."""
+    UN = ["", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "onze", "doze",
+          "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"]
+    DZ = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"]
+    CT = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos",
+          "oitocentos", "novecentos"]
+
+    def ate_999(n):
+        if n == 100:
+            return "cem"
+        c, r = divmod(n, 100)
+        partes = [CT[c]] if c else []
+        if r < 20:
+            if r:
+                partes.append(UN[r])
+        else:
+            d, u = divmod(r, 10)
+            partes.append(DZ[d] + (" e " + UN[u] if u else ""))
+        return " e ".join(partes)
+
+    def inteiro(n):
+        if n == 0:
+            return "zero"
+        grupos = []
+        for nome_s, nome_p, base in (("bilhão", "bilhões", 10**9), ("milhão", "milhões", 10**6), ("mil", "mil", 1000), ("", "", 1)):
+            q, n = divmod(n, base)
+            if q:
+                if base == 1000 and q == 1:
+                    grupos.append(("mil", q))
+                else:
+                    nome = nome_s if q == 1 else nome_p
+                    grupos.append(((ate_999(q) + (" " + nome if nome else "")), q))
+        texto = grupos[0][0]
+        for txt, q in grupos[1:]:
+            # "e" antes do último grupo quando ele é < 100 ou centena redonda ("mil e cem")
+            ultimo = (txt, q) == grupos[-1]
+            texto += (" e " if ultimo and (q < 100 or q % 100 == 0) else " ") + txt
+        return texto
+
+    centavos_total = int(round(float(valor or 0) * 100))
+    reais, centavos = divmod(centavos_total, 100)
+    partes = []
+    if reais:
+        t = inteiro(reais)
+        de = " de" if reais % 1_000_000 == 0 else ""  # "um milhão de reais"
+        partes.append(f"{t}{de} {'real' if reais == 1 else 'reais'}")
+    if centavos:
+        partes.append(f"{ate_999(centavos)} {'centavo' if centavos == 1 else 'centavos'}")
+    return " e ".join(partes) if partes else "zero real"
+
 
 # ============================================================================
 # Camada de banco de dados:
@@ -1218,7 +1284,7 @@ def api_pedido_pdf(pid):
     pdf.set_right_margin(15)
     pdf.add_page()
     CONTENT_W = 210 - 30
-    LIMITE_Y = 297 - 22
+    LIMITE_Y = 297 - 17  # o rodapé começa em 283 mm
 
     NAVY = (26, 51, 115)
     GOLD = (201, 174, 96)
@@ -1242,7 +1308,7 @@ def api_pedido_pdf(pid):
     pdf.set_fill_color(*GOLD)
     pdf.rect(0, 30, 210, 2.5, "F")
 
-    pdf.ln(8)
+    pdf.ln(6)
     pdf.set_font("ArialBlk", "", 15)
     pdf.set_text_color(*NAVY)
     pdf.cell(0, 8, "SOLICITAÇÃO DE MATERIAL", align="C", new_x="LMARGIN", new_y="NEXT")
@@ -1267,7 +1333,7 @@ def api_pedido_pdf(pid):
         linha_data += f"     •     ENTREGA ATÉ: {venc.strftime('%d/%m/%Y')} ({pedido['prazo_dias']} dias)"
     pdf.cell(0, 7, norm(linha_data), align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(30, 30, 30)
-    pdf.ln(6)
+    pdf.ln(4)
 
     pdf.set_font("ArialBlk", "", 13)
     pdf.set_text_color(*NAVY)
@@ -1280,8 +1346,9 @@ def api_pedido_pdf(pid):
     pdf.set_draw_color(0, 0, 0)
     pdf.ln(4)
 
-    col_w = [14, 72, 14, 26, 27, 27]  # total 180mm
-    headers = ["ITEM", "DESCRIÇÃO", "UND.", "QTDE", "VLR UNITÁRIO", "VLR TOTAL"]
+    # Quantidade já sai com a unidade ("10 PCT"), o que libera espaço para a descrição
+    col_w = [12, 92, 26, 25, 25]  # total 180mm
+    headers = ["ITEM", "DESCRIÇÃO", "QTDE", "VLR UNITÁRIO", "VLR TOTAL"]
 
     def cabecalho_tabela():
         pdf.set_fill_color(*NAVY)
@@ -1298,8 +1365,7 @@ def api_pedido_pdf(pid):
     fill = False
     for i, valor in linhas:
         desc = norm(i["descricao"] or "")
-        # Descrição longa quebra em várias linhas (antes era cortada)
-        n = max(1, len(pdf.multi_cell(col_w[1], LH, desc, dry_run=True, output="LINES")))
+        n = max(1, len(pdf.multi_cell(col_w[1] - 2, LH, desc, dry_run=True, output="LINES")))
         h = max(7, n * LH + 2)
         if pdf.get_y() + h > LIMITE_Y:
             pdf.add_page()
@@ -1308,33 +1374,138 @@ def api_pedido_pdf(pid):
         x, y = pdf.get_x(), pdf.get_y()
         pdf.cell(col_w[0], h, norm(i["numero_item"] or ""), border=1, fill=True, align="C")
         pdf.rect(x + col_w[0], y, col_w[1], h, "DF")
-        pdf.set_xy(x + col_w[0], y + (h - n * LH) / 2)
-        pdf.multi_cell(col_w[1], LH, desc, border=0, align="C")
+        pdf.set_xy(x + col_w[0] + 1, y + (h - n * LH) / 2)
+        pdf.multi_cell(col_w[1] - 2, LH, desc, border=0, align="L")
         pdf.set_xy(x + col_w[0] + col_w[1], y)
-        pdf.cell(col_w[2], h, norm(i["und"] or ""), border=1, fill=True, align="C")
-        pdf.cell(col_w[3], h, fmt_qtd(i["qtde_pedida"]), border=1, fill=True, align="R")
-        pdf.cell(col_w[4], h, "R$ " + fmt_br(i["valor_unitario"] or 0), border=1, fill=True, align="R")
-        pdf.cell(col_w[5], h, "R$ " + fmt_br(valor), border=1, fill=True, align="R")
+        qtd = fmt_qtd(i["qtde_pedida"]) + (f" {norm(i['und'])}" if i["und"] else "")
+        pdf.cell(col_w[2], h, qtd, border=1, fill=True, align="C")
+        pdf.cell(col_w[3], h, "R$ " + fmt_br(i["valor_unitario"] or 0), border=1, fill=True, align="R")
+        pdf.cell(col_w[4], h, "R$ " + fmt_br(valor), border=1, fill=True, align="R")
         pdf.set_xy(x, y + h)
         fill = not fill
 
-    if pdf.get_y() + 16 > LIMITE_Y:
+    # Linha de totais da tabela
+    if pdf.get_y() + 8 > LIMITE_Y:
+        pdf.add_page()
+        cabecalho_tabela()
+    pdf.set_fill_color(232, 237, 247)
+    pdf.set_font("ArialU", "B", 9)
+    n_itens = len(linhas)
+    pdf.cell(sum(col_w[:4]), 8, f"TOTAL  •  {n_itens} {'item' if n_itens == 1 else 'itens'}  ", border=1, fill=True, align="R")
+    pdf.cell(col_w[4], 8, "R$ " + fmt_br(valor_total), border=1, fill=True, align="R", new_x="LMARGIN", new_y="NEXT")
+
+    # Valor total em destaque, com o valor por extenso
+    extenso = f"({valor_por_extenso(valor_total)})"
+    pdf.set_font("ArialU", "", 9)
+    n_ext = max(1, len(pdf.multi_cell(CONTENT_W - 8, 4.5, extenso, dry_run=True, output="LINES")))
+    h_total = 11 + n_ext * 4.5 + 3
+    if pdf.get_y() + 4 + h_total > LIMITE_Y:
         pdf.add_page()
     pdf.ln(4)
+    y0 = pdf.get_y()
     pdf.set_fill_color(*NAVY)
+    pdf.rect(15, y0, CONTENT_W, h_total, "F")
     pdf.set_text_color(255, 255, 255)
+    pdf.set_xy(19, y0 + 2)
     pdf.set_font("ArialBlk", "", 12)
-    pdf.cell(CONTENT_W, 10, f"  VALOR TOTAL DO PEDIDO:  R$ {fmt_br(valor_total)}", border=0, fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(CONTENT_W - 8, 8, f"VALOR TOTAL DO PEDIDO:  R$ {fmt_br(valor_total)}", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_x(19)
+    pdf.set_font("ArialU", "", 9)
+    pdf.set_text_color(*LIGHT)
+    pdf.multi_cell(CONTENT_W - 8, 4.5, extenso)
+    pdf.set_y(y0 + h_total)
+    pdf.set_text_color(30, 30, 30)
+
+    # Instruções ao fornecedor
+    U = UNIDADE_PDF
+    ne_txt = norm(empenho["ne"]) if empenho else "-"
+    instrucoes = [
+        f"A Nota Fiscal deve conter o número da Nota de Empenho ({ne_txt}) e o número deste pedido ({norm(pedido['numero_pedido'])}).",
+    ]
+    if pedido["prazo_dias"] and parse_data(pedido["data_pedido"]):
+        venc = parse_data(pedido["data_pedido"]) + timedelta(days=int(pedido["prazo_dias"]))
+        instrucoes.append(f"Prazo de entrega: até {venc.strftime('%d/%m/%Y')} ({pedido['prazo_dias']} dias a contar de {data_br(pedido['data_pedido'])}).")
+    instrucoes += [
+        f"Local de entrega: {U['nome']} — {U['endereco']}.",
+        f"Horário de recebimento: {U['horario']}.",
+        f"Contato do {U['setor']}: {U['email']}",
+    ]
     if pedido["observacoes"]:
-        pdf.ln(4)
-        pdf.set_text_color(60, 60, 70)
+        instrucoes.append(f"Observações: {norm(pedido['observacoes'])}")
+
+    pdf.set_font("ArialU", "", 9)
+    BW = CONTENT_W - 12  # largura do texto dentro da caixa
+    alturas = [max(1, len(pdf.multi_cell(BW, 4.8, t, dry_run=True, output="LINES"))) * 4.8 for t in instrucoes]
+    h_instr = 8 + sum(alturas) + 1.2 * len(instrucoes) + 4
+    if pdf.get_y() + 8 + h_instr > LIMITE_Y:
+        pdf.add_page()
+    pdf.ln(5)
+    pdf.set_font("ArialBlk", "", 11)
+    pdf.set_text_color(*NAVY)
+    pdf.cell(0, 6, "INSTRUÇÕES AO FORNECEDOR", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_draw_color(*GOLD)
+    pdf.set_line_width(0.8)
+    pdf.line(15, pdf.get_y() + 0.5, 195, pdf.get_y() + 0.5)
+    pdf.set_line_width(0.2)
+    pdf.ln(3)
+    y0 = pdf.get_y()
+    caixa_h = sum(alturas) + 1.2 * len(instrucoes) + 3
+    pdf.set_fill_color(246, 248, 252)
+    pdf.set_draw_color(220, 226, 238)
+    pdf.rect(15, y0, CONTENT_W, caixa_h, "DF")
+    pdf.set_y(y0 + 2)
+    pdf.set_text_color(40, 40, 50)
+    for t in instrucoes:
+        pdf.set_x(18)
+        pdf.set_font("ArialU", "B", 9)
+        pdf.set_text_color(*GOLD)
+        pdf.cell(4, 4.8, "•")
+        pdf.set_text_color(40, 40, 50)
         pdf.set_font("ArialU", "", 9)
-        pdf.multi_cell(CONTENT_W, 5, norm("Observações: " + pedido["observacoes"]))
+        pdf.multi_cell(BW, 4.8, t, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1.2)
+    pdf.set_y(y0 + caixa_h)
+    pdf.set_draw_color(0, 0, 0)
+
+    # Local, data e assinaturas
+    h_ass = 5 + 6 + 12 + 12  # espaço + data + espaço para assinar + nomes
+    if pdf.get_y() + h_ass > LIMITE_Y:
+        pdf.add_page()
+    d = parse_data(pedido["data_pedido"]) or date.today()
+    pdf.ln(5)
+    pdf.set_font("ArialU", "", 10)
+    pdf.set_text_color(40, 40, 50)
+    pdf.cell(0, 6, f"{U['cidade']}, {d.day} de {MESES[d.month - 1]} de {d.year}.", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(12)
+    y_linha = pdf.get_y()
+    nomes = U["assinaturas"]
+    larg = 72
+    gap = (CONTENT_W - larg * len(nomes)) / (len(nomes) + 1)
+    pdf.set_draw_color(*NAVY)
+    pdf.set_line_width(0.3)
+    for k, nome_ass in enumerate(nomes):
+        x0 = 15 + gap + k * (larg + gap)
+        pdf.line(x0, y_linha, x0 + larg, y_linha)
+        pdf.set_xy(x0, y_linha + 1.5)
+        pdf.set_font("ArialU", "B", 10)
+        pdf.set_text_color(*NAVY)
+        pdf.cell(larg, 5.5, norm(nome_ass), align="C")
+        pdf.set_xy(x0, y_linha + 7)
+        pdf.set_font("ArialU", "", 8.5)
+        pdf.set_text_color(90, 90, 100)
+        pdf.cell(larg, 4.5, norm(U["setor"]), align="C")
+    pdf.set_line_width(0.2)
+
+    # Propriedades do arquivo
+    pdf.set_title(f"Pedido {norm(pedido['numero_pedido'])} - {ne_txt}")
+    pdf.set_author(f"{U['nome']} - {U['setor']}")
+    pdf.set_subject("Solicitação de material - pedido de entrega")
+    pdf.set_creator("Sistema de Aprovisionamento")
 
     buf = io.BytesIO()
     pdf.output(buf)
     buf.seek(0)
-    nome = re.sub(r"[^A-Za-z0-9._-]+", "_", f"PEDIDO_{pedido['numero_pedido']}") + ".pdf"
+    nome = re.sub(r"[^A-Za-z0-9._-]+", "_", f"PEDIDO_{pedido['numero_pedido']}_{ne_txt}").strip("_") + ".pdf"
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=nome)
 
 
