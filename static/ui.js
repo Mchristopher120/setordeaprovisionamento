@@ -132,3 +132,21 @@ function linhaCarregando(colspan) {
 
 /** Remove acentos e caixa para busca. */
 const normalizar = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+/** Reduz a fonte de valores grandes (ex.: R$ 1.234.567,89) até caberem no card. */
+function ajustarValores(container) {
+    if (!container) return;
+    container.querySelectorAll('.kpi-value').forEach(el => {
+        el.style.fontSize = '';
+        let tam = parseFloat(getComputedStyle(el).fontSize);
+        while (el.scrollWidth > el.clientWidth && tam > 14) {
+            tam -= 1;
+            el.style.fontSize = tam + 'px';
+        }
+    });
+}
+let _ajusteTimer;
+window.addEventListener('resize', () => {
+    clearTimeout(_ajusteTimer);
+    _ajusteTimer = setTimeout(() => ajustarValores(document.getElementById('kpis')), 150);
+});

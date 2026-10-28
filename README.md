@@ -68,7 +68,7 @@ static/app.js       # dashboard
 static/empenhos.js  # tela de empenhos
 static/historico.js # histórico e lixeira
 static/style.css
-static/fonts/       # fontes do PDF (DejaVu Sans)
+static/fonts/       # fonte Inter (telas: InterVariable.woff2; PDF: Inter-*.ttf) — licença OFL
 static/img/         # folha de acanto (Logística) e brasão do 3º CGEO (PDF)
 static/tema.js      # tema claro/escuro
 INICIAR.bat         # inicializador local

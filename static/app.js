@@ -72,6 +72,9 @@ function renderKPIs(s) {
             <div class="kpi-value">${fmtNum(s.pedidos_em_aberto)}</div>
             <div class="kpi-sub">${atraso}</div>
         </div>`;
+    // A fonte Inter pode demorar um instante; ajusta de novo quando ela terminar de carregar
+    ajustarValores(document.getElementById('kpis'));
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => ajustarValores(document.getElementById('kpis')));
 }
 
 function renderIndicadores(s) {

@@ -1257,15 +1257,17 @@ def api_pedido_pdf(pid):
     linhas = [(i, float(i["qtde_pedida"] or 0) * float(i["valor_unitario"] or 0)) for i in itens]
     valor_total = sum(v for _, v in linhas)
 
-    FONT = os.path.join(BASE_DIR, "static", "fonts", "DejaVuSans.ttf")
-    FONT_BLACK = os.path.join(BASE_DIR, "static", "fonts", "DejaVuSans-Bold.ttf")
+    def fonte(peso):
+        return os.path.join(BASE_DIR, "static", "fonts", f"Inter-{peso}.ttf")
 
     class PedidoPDF(FPDF):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.add_font("ArialU", "", FONT)
-            self.add_font("ArialU", "B", FONT_BLACK)
-            self.add_font("ArialBlk", "", FONT_BLACK)
+            # Inter: texto normal, negrito (SemiBold) e títulos (Bold/ExtraBold)
+            self.add_font("Inter", "", fonte("Regular"))
+            self.add_font("Inter", "B", fonte("SemiBold"))
+            self.add_font("InterTit", "", fonte("Bold"))
+            self.add_font("InterTit", "B", fonte("ExtraBold"))
 
         def footer(self):
             self.set_y(-14)
@@ -1273,7 +1275,7 @@ def api_pedido_pdf(pid):
             self.set_line_width(0.4)
             self.line(15, self.get_y(), 195, self.get_y())
             self.set_y(-11)
-            self.set_font("ArialU", size=7.5)
+            self.set_font("Inter", size=7.5)
             self.set_text_color(110, 110, 110)
             self.cell(0, 8, norm(f"3º CENTRO DE GEOINFORMAÇÃO  •  Doc. gerado automaticamente em {datetime.now().strftime('%d/%m/%Y %H:%M')}  •  Página {self.page_no()}/{{nb}}"), align="C")
 
@@ -1300,32 +1302,32 @@ def api_pedido_pdf(pid):
         pdf.image(folha, x=210 - 12 - 30, y=(30 - 30 * 165 / 320) / 2, w=30)
     pdf.set_text_color(*LIGHT)
     pdf.set_y(7.5)
-    pdf.set_font("ArialU", "B", 10)
+    pdf.set_font("Inter", "B", 10)
     pdf.cell(0, 5.5, "EXÉRCITO BRASILEIRO", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(0.5)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("ArialBlk", "", 17)
+    pdf.set_font("InterTit", "", 17)
     pdf.cell(0, 9, "3º CENTRO DE GEOINFORMAÇÃO", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.set_fill_color(*GOLD)
     pdf.rect(0, 30, 210, 2.5, "F")
 
     pdf.set_y(32.5 + 6)  # abaixo da faixa dourada
-    pdf.set_font("ArialBlk", "", 15)
+    pdf.set_font("InterTit", "", 15)
     pdf.set_text_color(*NAVY)
     pdf.cell(0, 8, "SOLICITAÇÃO DE MATERIAL", align="C", new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(3)
     pdf.set_text_color(*NAVY)
-    pdf.set_font("ArialBlk", "", 26)
+    pdf.set_font("InterTit", "", 26)
     pdf.cell(0, 11, f"PEDIDO {norm(pedido['numero_pedido'])}", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("ArialBlk", "", 16)
+    pdf.set_font("InterTit", "", 16)
     pdf.cell(0, 9, norm(empenho['ne'] if empenho else "-"), align="C", new_x="LMARGIN", new_y="NEXT")
     if empenho and empenho["nome_credor"]:
         pdf.ln(1)
-        pdf.set_font("ArialBlk", "", 15)
+        pdf.set_font("InterTit", "", 15)
         pdf.multi_cell(0, 7.5, norm(empenho["nome_credor"]), align="C", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(1)
-    pdf.set_font("ArialU", "B", 12)
+    pdf.set_font("Inter", "B", 12)
     pdf.set_text_color(60, 60, 70)
     linha_data = f"DATA: {data_br(pedido['data_pedido']) or '-'}"
     if pedido["prazo_dias"] and parse_data(pedido["data_pedido"]):
@@ -1335,7 +1337,7 @@ def api_pedido_pdf(pid):
     pdf.set_text_color(30, 30, 30)
     pdf.ln(4)
 
-    pdf.set_font("ArialBlk", "", 13)
+    pdf.set_font("InterTit", "", 13)
     pdf.set_text_color(*NAVY)
     pdf.cell(0, 8, "ITENS SOLICITADOS", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(1)
@@ -1353,11 +1355,11 @@ def api_pedido_pdf(pid):
     def cabecalho_tabela():
         pdf.set_fill_color(*NAVY)
         pdf.set_text_color(255, 255, 255)
-        pdf.set_font("ArialU", "B", 8)
+        pdf.set_font("Inter", "B", 8)
         for h, w in zip(headers, col_w):
             pdf.cell(w, 8, norm(h), border=1, fill=True, align="C")
         pdf.ln()
-        pdf.set_font("ArialU", "", 9)
+        pdf.set_font("Inter", "", 9)
         pdf.set_text_color(30, 30, 30)
 
     cabecalho_tabela()
@@ -1389,14 +1391,14 @@ def api_pedido_pdf(pid):
         pdf.add_page()
         cabecalho_tabela()
     pdf.set_fill_color(232, 237, 247)
-    pdf.set_font("ArialU", "B", 9)
+    pdf.set_font("Inter", "B", 9)
     n_itens = len(linhas)
     pdf.cell(sum(col_w[:4]), 8, f"TOTAL  •  {n_itens} {'item' if n_itens == 1 else 'itens'}  ", border=1, fill=True, align="R")
     pdf.cell(col_w[4], 8, "R$ " + fmt_br(valor_total), border=1, fill=True, align="R", new_x="LMARGIN", new_y="NEXT")
 
     # Valor total em destaque, com o valor por extenso
     extenso = f"({valor_por_extenso(valor_total)})"
-    pdf.set_font("ArialU", "", 9)
+    pdf.set_font("Inter", "", 9)
     n_ext = max(1, len(pdf.multi_cell(CONTENT_W - 8, 4.5, extenso, dry_run=True, output="LINES")))
     h_total = 11 + n_ext * 4.5 + 3
     if pdf.get_y() + 4 + h_total > LIMITE_Y:
@@ -1407,12 +1409,12 @@ def api_pedido_pdf(pid):
     pdf.rect(15, y0, CONTENT_W, h_total, "F")
     pdf.set_text_color(255, 255, 255)
     pdf.set_xy(19, y0 + 2)
-    pdf.set_font("ArialBlk", "", 12)
+    pdf.set_font("InterTit", "", 12)
     pdf.cell(CONTENT_W - 8, 8, f"VALOR TOTAL DO PEDIDO:  R$ {fmt_br(valor_total)}", new_x="LMARGIN", new_y="NEXT")
     pdf.set_x(19)
-    pdf.set_font("ArialU", "", 9)
+    pdf.set_font("Inter", "", 9)
     pdf.set_text_color(*LIGHT)
-    pdf.multi_cell(CONTENT_W - 8, 4.5, extenso)
+    pdf.multi_cell(CONTENT_W - 8, 4.5, extenso, align="L")
     pdf.set_y(y0 + h_total)
     pdf.set_text_color(30, 30, 30)
 
@@ -1433,14 +1435,14 @@ def api_pedido_pdf(pid):
     if pedido["observacoes"]:
         instrucoes.append(f"Observações: {norm(pedido['observacoes'])}")
 
-    pdf.set_font("ArialU", "", 9)
+    pdf.set_font("Inter", "", 9)
     BW = CONTENT_W - 12  # largura do texto dentro da caixa
     alturas = [max(1, len(pdf.multi_cell(BW, 4.8, t, dry_run=True, output="LINES"))) * 4.8 for t in instrucoes]
     h_instr = 8 + sum(alturas) + 1.2 * len(instrucoes) + 4
     if pdf.get_y() + 8 + h_instr > LIMITE_Y:
         pdf.add_page()
     pdf.ln(5)
-    pdf.set_font("ArialBlk", "", 11)
+    pdf.set_font("InterTit", "", 11)
     pdf.set_text_color(*NAVY)
     pdf.cell(0, 6, "INSTRUÇÕES AO FORNECEDOR", new_x="LMARGIN", new_y="NEXT")
     pdf.set_draw_color(*GOLD)
@@ -1457,12 +1459,12 @@ def api_pedido_pdf(pid):
     pdf.set_text_color(40, 40, 50)
     for t in instrucoes:
         pdf.set_x(18)
-        pdf.set_font("ArialU", "B", 9)
+        pdf.set_font("Inter", "B", 9)
         pdf.set_text_color(*GOLD)
         pdf.cell(4, 4.8, "•")
         pdf.set_text_color(40, 40, 50)
-        pdf.set_font("ArialU", "", 9)
-        pdf.multi_cell(BW, 4.8, t, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Inter", "", 9)
+        pdf.multi_cell(BW, 4.8, t, align="L", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(1.2)
     pdf.set_y(y0 + caixa_h)
     pdf.set_draw_color(0, 0, 0)
