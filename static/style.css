@@ -632,6 +632,14 @@ h4 { font-size: 15px; font-weight: 700; margin: 16px 0 10px; color: var(--text);
 .logo-img { height: 44px; width: auto; display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
 .auth-logo-img { height: 62px; width: auto; margin: 0 auto 4px; display: block; }
 .btn-tema { background: none; border: none; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+/* Ícones de traço da barra superior (opção C) */
+.topbar .ico { width: 18px; height: 18px; flex: none; stroke-width: 2; }
+.nav-link, .nav-user { display: inline-flex; align-items: center; gap: 7px; }
+.btn-tema .ico { display: none; }
+:root[data-tema-pref="auto"] .btn-tema .tema-auto,
+:root[data-tema-pref="dark"] .btn-tema .tema-dark,
+:root[data-tema-pref="light"] .btn-tema .tema-light,
+:root:not([data-tema-pref]) .btn-tema .tema-auto { display: block; }
 .banner-aviso { background: var(--amber-bg); color: var(--banner-text); font-size: 13px; text-align: center; padding: 8px 16px; }
 .banner-aviso code, .auth-card code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
 .page-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 12px; }

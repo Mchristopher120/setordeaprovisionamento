@@ -1,3 +1,4 @@
+{% from '_icones.html' import icone as ico %}
 <header class="topbar">
     <div class="brand">
         {% if logo_img %}
@@ -11,14 +12,14 @@
         </div>
     </div>
     <nav class="topbar-nav" aria-label="Navegação principal">
-        <a href="/" class="nav-link {{ 'active' if pagina == 'dashboard' }}" {% if pagina == 'dashboard' %}aria-current="page"{% endif %}>📊 Dashboard</a>
-        <a href="/empenhos" class="nav-link {{ 'active' if pagina == 'empenhos' }}" {% if pagina == 'empenhos' %}aria-current="page"{% endif %}>📦 Empenhos</a>
-        <a href="/historico" class="nav-link {{ 'active' if pagina == 'historico' }}" {% if pagina == 'historico' %}aria-current="page"{% endif %}>🕘 Histórico</a>
-        <a href="/api/exportar.xlsx" class="nav-link" title="Baixar planilha Excel com todos os dados">⬇ Excel</a>
-        <button type="button" id="btnTema" class="nav-link btn-tema">🖥️ <span class="tema-rotulo">Automático</span></button>
+        <a href="/" class="nav-link {{ 'active' if pagina == 'dashboard' }}" {% if pagina == 'dashboard' %}aria-current="page"{% endif %}>{{ ico('home') }}Dashboard</a>
+        <a href="/empenhos" class="nav-link {{ 'active' if pagina == 'empenhos' }}" {% if pagina == 'empenhos' %}aria-current="page"{% endif %}>{{ ico('receipt') }}Empenhos</a>
+        <a href="/historico" class="nav-link {{ 'active' if pagina == 'historico' }}" {% if pagina == 'historico' %}aria-current="page"{% endif %}>{{ ico('history') }}Histórico</a>
+        <a href="/api/exportar.xlsx" class="nav-link" title="Baixar planilha Excel com todos os dados">{{ ico('file-spreadsheet') }}Excel</a>
+        <button type="button" id="btnTema" class="nav-link btn-tema">{{ ico('device-desktop', 'ico tema-auto') }}{{ ico('moon', 'ico tema-dark') }}{{ ico('sun', 'ico tema-light') }}<span class="tema-rotulo">Automático</span></button>
         {% if auth_ativa %}
-        <span class="nav-user" title="Conectado como {{ usuario }}">👤 {{ usuario }}</span>
-        <a href="/logout" class="nav-link">Sair</a>
+        <span class="nav-user" title="Conectado como {{ usuario }}">{{ ico('user') }}{{ usuario }}</span>
+        <a href="/logout" class="nav-link">{{ ico('logout') }}Sair</a>
         {% endif %}
     </nav>
 </header>
