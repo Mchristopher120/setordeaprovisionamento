@@ -150,3 +150,15 @@ window.addEventListener('resize', () => {
     clearTimeout(_ajusteTimer);
     _ajusteTimer = setTimeout(() => ajustarValores(document.getElementById('kpis')), 150);
 });
+
+/** Contador vermelho no item "Empenhos" da barra: pedidos atrasados + NFs a pagar. */
+function marcarPendencias(s) {
+    const el = document.getElementById('navPend');
+    if (!el || !s) return;
+    const atrasados = s.pedidos_atrasados || 0, nfs = s.nfs_a_pagar || 0, n = atrasados + nfs;
+    el.hidden = !n;
+    el.textContent = n > 99 ? '99+' : String(n);
+    const txt = `${atrasados} pedido(s) atrasado(s) e ${nfs} NF(s) a pagar`;
+    el.title = txt;
+    el.setAttribute('aria-label', txt);
+}

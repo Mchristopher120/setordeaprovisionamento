@@ -14,6 +14,7 @@ async function loadAll({ aviso = false } = {}) {
         estadoDash.empenhos = empenhos;
         renderAtencao(stats);
         renderKPIs(stats);
+        marcarPendencias(stats);
         renderGraficos(stats, empenhos, evolucao);
         renderTable();
         if (aviso) showToast('Dados atualizados', 'success');

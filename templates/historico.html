@@ -12,10 +12,16 @@
     <script src="{{ url_for('static', filename='tema.js') }}"></script>
 </head>
 <body>
-    {% set pagina = 'historico' %}{% set icone_nome = 'history' %}{% set titulo = 'Histórico & Lixeira' %}{% set subtitulo = 'Quem fez o quê • Restaurar exclusões' %}
+    {% set pagina = 'historico' %}
     {% include '_topbar.html' %}
 
     <main class="container">
+        <div class="page-head">
+            <div>
+                <h2 class="page-title">Histórico e lixeira</h2>
+                <p class="page-sub">Quem fez o quê · restaurar exclusões</p>
+            </div>
+        </div>
         <div class="tabs" role="tablist">
             <button class="tab active" role="tab" aria-selected="true" data-tab="hist">{{ ico('history') }} Histórico de alterações</button>
             <button class="tab" role="tab" aria-selected="false" data-tab="lixo">{{ ico('trash') }} Lixeira <span class="count-badge" id="lixoCount">0</span></button>
