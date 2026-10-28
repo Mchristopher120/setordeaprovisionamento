@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Histórico - Aprovisionamento</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    {% set pagina = 'historico' %}{% set icone = '🕘' %}{% set titulo = 'Histórico & Lixeira' %}{% set subtitulo = 'Quem fez o quê • Restaurar exclusões' %}
+    {% include '_topbar.html' %}
+
+    <main class="container">
+        <div class="tabs" role="tablist">
+            <button class="tab active" role="tab" aria-selected="true" data-tab="hist">🕘 Histórico de alterações</button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="lixo">🗑 Lixeira <span class="count-badge" id="lixoCount">0</span></button>
+        </div>
+
+        <section class="card" id="tab-hist">
+            <div class="toolbar">
+                <input type="search" id="hBusca" class="input" placeholder="Buscar na descrição, NE ou usuário…" aria-label="Buscar">
+                <select id="hAcao" class="input" aria-label="Tipo de ação">
+                    <option value="">Todas as ações</option>
+                    <option value="CRIAR">Criações</option>
+                    <option value="EDITAR">Edições</option>
+                    <option value="EXCLUIR">Exclusões</option>
+                    <option value="RESTAURAR">Restaurações</option>
+                    <option value="RECEBER">Recebimentos (NF)</option>
+                    <option value="PAGAR">Pagamentos (OB)</option>
+                    <option value="ENCERRAR">Pedidos encerrados</option>
+                    <option value="REFORCO">Reforços</option>
+                    <option value="ANULACAO">Anulações</option>
+                    <option value="LOGIN">Acessos</option>
+                </select>
+                <select id="hUsuario" class="input" aria-label="Usuário"><option value="">Todos os usuários</option></select>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Empenho</th><th>Descrição</th></tr></thead>
+                    <tbody id="tbodyHist"></tbody>
+                </table>
+            </div>
+            <p class="muted small mt-small">Mostrando os 1.000 registros mais recentes.</p>
+        </section>
+
+        <section class="card" id="tab-lixo" hidden>
+            <p class="muted mb">Itens excluídos ficam aqui com tudo o que saiu junto (itens, pedidos, NFs, pagamentos) e podem ser restaurados.
+               Ao restaurar algo que pertencia a um empenho/pedido que também foi excluído, restaure primeiro o "pai".</p>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Excluído em</th><th>Por</th><th>Tipo</th><th>O que foi excluído</th><th></th></tr></thead>
+                    <tbody id="tbodyLixo"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="{{ url_for('static', filename='ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='historico.js') }}"></script>
+</body>
+</html>

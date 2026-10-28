@@ -1,0 +1,22 @@
+<header class="topbar">
+    <div class="brand">
+        <span class="logo">{{ icone }}</span>
+        <div>
+            <h1>{{ titulo }}</h1>
+            <p class="sub">{{ subtitulo }}</p>
+        </div>
+    </div>
+    <nav class="topbar-nav" aria-label="Navegação principal">
+        <a href="/" class="nav-link {{ 'active' if pagina == 'dashboard' }}" {% if pagina == 'dashboard' %}aria-current="page"{% endif %}>📊 Dashboard</a>
+        <a href="/empenhos" class="nav-link {{ 'active' if pagina == 'empenhos' }}" {% if pagina == 'empenhos' %}aria-current="page"{% endif %}>📦 Empenhos</a>
+        <a href="/historico" class="nav-link {{ 'active' if pagina == 'historico' }}" {% if pagina == 'historico' %}aria-current="page"{% endif %}>🕘 Histórico</a>
+        <a href="/api/exportar.xlsx" class="nav-link" title="Baixar planilha Excel com todos os dados">⬇ Excel</a>
+        {% if auth_ativa %}
+        <span class="nav-user" title="Conectado como {{ usuario }}">👤 {{ usuario }}</span>
+        <a href="/logout" class="nav-link">Sair</a>
+        {% endif %}
+    </nav>
+</header>
+{% if not auth_ativa %}
+<div class="banner-aviso">⚠️ Modo local sem senha. Para exigir login, defina a variável <code>APP_PASSWORD</code>.</div>
+{% endif %}

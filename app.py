@@ -1,8 +1,17 @@
+import hashlib
+import hmac
+import io
+import json
 import os
 import re
+import secrets
+import sys
 import time
-from datetime import datetime
-from flask import Flask, render_template, request, jsonify, g
+from datetime import date, datetime, timedelta
+from functools import wraps
+
+from flask import (Flask, g, jsonify, redirect, render_template, request,
+                   send_file, session, url_for)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "aprov.db")
@@ -15,13 +24,30 @@ DATABASE_URL = (
 ).strip()
 USE_POSTGRES = DATABASE_URL.startswith("postgres") or DATABASE_URL.startswith("postgresql")
 
+# Senha única do setor (variável de ambiente APP_PASSWORD no Vercel / no PC)
+APP_PASSWORD = (os.environ.get("APP_PASSWORD") or os.environ.get("SENHA_SETOR") or "").strip()
+
 app = Flask(__name__)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=USE_POSTGRES,  # produção (Vercel) é sempre HTTPS
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+)
+# A chave da sessão precisa ser a MESMA em todas as instâncias do Vercel.
+# Use SECRET_KEY; na falta dela, deriva-se uma chave estável da senha.
+app.secret_key = (
+    os.environ.get("SECRET_KEY")
+    or (hashlib.sha256(("aprov|" + APP_PASSWORD + "|" + DATABASE_URL).encode()).hexdigest() if APP_PASSWORD else secrets.token_hex(32))
+)
+
+EPS = 1e-9  # tolerância para comparar quantidades em ponto flutuante
 
 
 # ============================================================================
 # Camada de banco de dados:
-#   * LOCAL  -> SQLite (aprov.db)  [sem DATABASE_URL]
-#   * VERCELL -> PostgreSQL        [com DATABASE_URL, ex.: vercel-postgres/neon]
+#   * LOCAL   -> SQLite (aprov.db)  [sem DATABASE_URL]
+#   * VERCEL  -> PostgreSQL         [com DATABASE_URL, ex.: vercel-postgres/neon]
 # Mantém a mesma interface usada nas rotas (execute/commit/close, lastrowid,
 # linhas acessíveis por nome de coluna).
 # ============================================================================
@@ -44,7 +70,7 @@ if USE_POSTGRES:
                 if tentativa == 3:
                     raise
                 time.sleep(1 + tentativa)
-        return None  # nunca alcançado; mantém o linter satisfeito
+        return None
 
     class PgCursor:
         def __init__(self, cur, lastrowid=None):
@@ -72,6 +98,8 @@ if USE_POSTGRES:
             return PgCursor(cur, lastrowid)
         def commit(self):
             self.conn.commit()
+        def rollback(self):
+            self.conn.rollback()
         def close(self):
             self.conn.close()
 
@@ -80,50 +108,11 @@ if USE_POSTGRES:
             g.db = PgDb(_pg_connect())
         return g.db
 
-    def init_db():
-        statements = [
-            "CREATE TABLE IF NOT EXISTS empenhos ("
-            " id SERIAL PRIMARY KEY,"
-            " ne TEXT, processo TEXT, nome_credor TEXT, criado_em TEXT)",
-            "CREATE TABLE IF NOT EXISTS itens ("
-            " id SERIAL PRIMARY KEY,"
-            " empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,"
-            " numero_item TEXT, descricao TEXT, und TEXT, frn TEXT,"
-            " qtde_empenhada DOUBLE PRECISION DEFAULT 0,"
-            " valor_unitario DOUBLE PRECISION DEFAULT 0,"
-            " valor_total DOUBLE PRECISION DEFAULT 0,"
-            " criado_em TEXT)",
-            "CREATE INDEX IF NOT EXISTS idx_itens_empenho ON itens(empenho_id)",
-            "CREATE TABLE IF NOT EXISTS pedidos ("
-            " id SERIAL PRIMARY KEY,"
-            " empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,"
-            " numero_pedido TEXT, data_pedido TEXT, observacoes TEXT, criado_em TEXT)",
-            "CREATE INDEX IF NOT EXISTS idx_pedidos_empenho ON pedidos(empenho_id)",
-            "CREATE TABLE IF NOT EXISTS pedido_itens ("
-            " id SERIAL PRIMARY KEY,"
-            " pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,"
-            " item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,"
-            " qtde_pedida DOUBLE PRECISION DEFAULT 0)",
-            "CREATE INDEX IF NOT EXISTS idx_pi_pedido ON pedido_itens(pedido_id)",
-            "CREATE INDEX IF NOT EXISTS idx_pi_item ON pedido_itens(item_id)",
-            "CREATE TABLE IF NOT EXISTS recebimentos ("
-            " id SERIAL PRIMARY KEY,"
-            " empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,"
-            " pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,"
-            " item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,"
-            " nf TEXT, data_recebimento TEXT,"
-            " qtde_recebida DOUBLE PRECISION DEFAULT 0,"
-            " observacoes TEXT, criado_em TEXT)",
-            "CREATE INDEX IF NOT EXISTS idx_rec_item ON recebimentos(item_id)",
-            "CREATE INDEX IF NOT EXISTS idx_rec_pedido ON recebimentos(pedido_id)",
-        ]
-        con = _pg_connect()
-        try:
-            for s in statements:
-                con.execute(s)
-            con.commit()
-        finally:
-            con.close()
+    def _conexao_init():
+        return _pg_connect()
+
+    PK = "SERIAL PRIMARY KEY"
+    REAL = "DOUBLE PRECISION"
 else:
     import sqlite3
 
@@ -134,82 +123,115 @@ else:
             g.db.execute("PRAGMA foreign_keys = ON")
         return g.db
 
-    def init_db():
+    def _conexao_init():
         con = sqlite3.connect(DB_PATH)
-        con.executescript(
-            """
-            -- ===================== SISTEMA DE EMPENHOS (itens/pedidos/recebimentos) =====================
-            CREATE TABLE IF NOT EXISTS empenhos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ne TEXT,
-                processo TEXT,
-                nome_credor TEXT,
-                criado_em TEXT
-            );
+        con.row_factory = sqlite3.Row
+        return con
 
-            CREATE TABLE IF NOT EXISTS itens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
-                numero_item TEXT,
-                descricao TEXT,
-                und TEXT,
-                frn TEXT,
-                qtde_empenhada REAL DEFAULT 0,
-                valor_unitario REAL DEFAULT 0,
-                valor_total REAL DEFAULT 0,
-                criado_em TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_itens_empenho ON itens(empenho_id);
+    PK = "INTEGER PRIMARY KEY AUTOINCREMENT"
+    REAL = "REAL"
 
-            CREATE TABLE IF NOT EXISTS pedidos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
-                numero_pedido TEXT,
-                data_pedido TEXT,
-                observacoes TEXT,
-                criado_em TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_pedidos_empenho ON pedidos(empenho_id);
 
-            CREATE TABLE IF NOT EXISTS pedido_itens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
-                item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
-                qtde_pedida REAL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_pi_pedido ON pedido_itens(pedido_id);
-            CREATE INDEX IF NOT EXISTS idx_pi_item ON pedido_itens(item_id);
+# Schema único (SQLite e PostgreSQL). Tabelas novas entram aqui e colunas
+# novas em COLUNAS_NOVAS — a migração roda sozinha ao iniciar.
+SCHEMA = [
+    f"""CREATE TABLE IF NOT EXISTS empenhos (
+        id {PK}, ne TEXT, processo TEXT, nome_credor TEXT, criado_em TEXT)""",
+    f"""CREATE TABLE IF NOT EXISTS itens (
+        id {PK},
+        empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
+        numero_item TEXT, descricao TEXT, und TEXT, frn TEXT,
+        qtde_empenhada {REAL} DEFAULT 0, valor_unitario {REAL} DEFAULT 0,
+        valor_total {REAL} DEFAULT 0, criado_em TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_itens_empenho ON itens(empenho_id)",
+    f"""CREATE TABLE IF NOT EXISTS pedidos (
+        id {PK},
+        empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
+        numero_pedido TEXT, data_pedido TEXT, observacoes TEXT, criado_em TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_pedidos_empenho ON pedidos(empenho_id)",
+    f"""CREATE TABLE IF NOT EXISTS pedido_itens (
+        id {PK},
+        pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+        item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
+        qtde_pedida {REAL} DEFAULT 0)""",
+    "CREATE INDEX IF NOT EXISTS idx_pi_pedido ON pedido_itens(pedido_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pi_item ON pedido_itens(item_id)",
+    # RECEBIMENTOS (NF): baixa do saldo físico e LIQUIDAÇÃO do valor
+    f"""CREATE TABLE IF NOT EXISTS recebimentos (
+        id {PK},
+        empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
+        pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+        item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
+        nf TEXT, data_recebimento TEXT, qtde_recebida {REAL} DEFAULT 0,
+        observacoes TEXT, criado_em TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_rec_item ON recebimentos(item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_rec_pedido ON recebimentos(pedido_id)",
+    # PAGAMENTOS (Ordem Bancária) — etapa seguinte à liquidação
+    f"""CREATE TABLE IF NOT EXISTS pagamentos (
+        id {PK},
+        empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
+        ob TEXT, data_pagamento TEXT, valor {REAL} DEFAULT 0,
+        nf TEXT, observacoes TEXT, criado_em TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_pag_empenho ON pagamentos(empenho_id)",
+    # REFORÇO / ANULAÇÃO de quantidade do item (histórico do valor empenhado)
+    f"""CREATE TABLE IF NOT EXISTS movimentos_item (
+        id {PK},
+        item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
+        empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
+        tipo TEXT, qtde {REAL} DEFAULT 0, data TEXT, documento TEXT,
+        observacoes TEXT, criado_em TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_mov_item ON movimentos_item(item_id)",
+    # HISTÓRICO (auditoria) — sem FK de propósito: sobrevive às exclusões
+    f"""CREATE TABLE IF NOT EXISTS auditoria (
+        id {PK}, quando TEXT, usuario TEXT, acao TEXT, entidade TEXT,
+        entidade_id INTEGER, empenho_id INTEGER, descricao TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_aud_empenho ON auditoria(empenho_id)",
+    # LIXEIRA — guarda uma cópia completa do que foi excluído
+    f"""CREATE TABLE IF NOT EXISTS lixeira (
+        id {PK}, quando TEXT, usuario TEXT, tipo TEXT, descricao TEXT,
+        empenho_id INTEGER, dados TEXT, restaurado INTEGER DEFAULT 0)""",
+    f"""CREATE TABLE IF NOT EXISTS login_falhas (
+        id {PK}, ip TEXT, quando TEXT)""",
+]
 
-            -- RECEBIMENTOS: baixa física (saldo do item) + financeiro (NF)
-            CREATE TABLE IF NOT EXISTS recebimentos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                empenho_id INTEGER NOT NULL REFERENCES empenhos(id) ON DELETE CASCADE,
-                pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
-                item_id INTEGER NOT NULL REFERENCES itens(id) ON DELETE CASCADE,
-                nf TEXT,
-                data_recebimento TEXT,
-                qtde_recebida REAL DEFAULT 0,
-                observacoes TEXT,
-                criado_em TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_rec_item ON recebimentos(item_id);
-            CREATE INDEX IF NOT EXISTS idx_rec_pedido ON recebimentos(pedido_id);
-            """
-        )
+COLUNAS_NOVAS = [
+    ("pedidos", "prazo_dias", "INTEGER"),
+    ("pedidos", "encerrado", "INTEGER DEFAULT 0"),
+    ("pedidos", "encerrado_em", "TEXT"),
+]
+
+
+def init_db():
+    con = _conexao_init()
+    try:
+        for s in SCHEMA:
+            con.execute(s)
+        for tabela, coluna, tipo in COLUNAS_NOVAS:
+            if USE_POSTGRES:
+                con.execute(f"ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {coluna} {tipo}")
+            else:
+                existentes = [r[1] for r in con.execute(f"PRAGMA table_info({tabela})").fetchall()]
+                if coluna not in existentes:
+                    con.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
         con.commit()
+    finally:
         con.close()
 
 
 @app.errorhandler(500)
 def erro_500(e):
-    """Banco da Neon pode estar 'dormindo' (grátis: dorme após 5 min sem uso).
-    Devolve um JSON amigável para a API em vez de página HTML crua."""
+    """Separa 'banco indisponível' (Neon dormindo) de erros de programa."""
+    original = getattr(e, "original_exception", None) or e
+    print("ERRO 500:", repr(original), file=sys.stderr)
+    nome = type(original).__name__
+    banco_off = "Operational" in nome or "Connection" in nome or "Timeout" in nome
     if request.path.startswith("/api/"):
-        return jsonify({
-            "erro": "banco_dormindo",
-            "mensagem": "O banco de dados estava dormindo e acordou agora. Recarregue a página em alguns segundos.",
-        }), 500
-    return render_template("index.html"), 500
+        if banco_off:
+            return jsonify({"erro": "banco_indisponivel",
+                            "mensagem": "O banco de dados estava dormindo e está acordando. Tente de novo em alguns segundos."}), 503
+        return jsonify({"erro": "erro_interno",
+                        "mensagem": "Ocorreu um erro inesperado no servidor. Se persistir, avise o responsável pelo sistema."}), 500
+    return render_template("erro.html", banco_off=banco_off), 503 if banco_off else 500
 
 
 @app.teardown_appcontext
@@ -219,74 +241,31 @@ def close_db(exc):
         db.close()
 
 
+def agora():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def parse_money(v):
+    """Aceita '1.234,56', '1234,56', '1234.56', '22.5', 'R$ 10' e números."""
     if v is None:
         return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
     s = str(v).strip()
     if s == "":
         return 0.0
-    s = s.replace("R$", "").replace("US$", "").strip()
-    has_comma = "," in s
-    has_dot = "." in s
-    if has_comma:
-        # pt-BR: "1.234,56" ou "1234,56"
+    s = s.replace("R$", "").replace("US$", "").replace(" ", "").strip()
+    if "," in s:
         s = s.replace(".", "").replace(",", ".")
-    elif has_dot:
-        # Se só há um ponto e o final tem 1-2 dígitos => decimal (1234.56)
-        # Senão vira separador de milhar (1.234)
-        if re.search(r"\.\d{1,2}$", s):
-            pass  # mantém como decimal
-        else:
+    elif "." in s:
+        # Um ponto seguido de 1-2 dígitos no final => decimal (22.5 / 1234.56).
+        # Senão é separador de milhar (1.234 / 1.234.567).
+        if not (s.count(".") == 1 and re.search(r"\.\d{1,2}$", s)):
             s = s.replace(".", "")
     try:
         return float(s)
     except ValueError:
         return 0.0
-
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-# ============================================================================
-# SISTEMA DE EMPENHOS (cadastro por item -> pedidos -> recebimentos -> saldo)
-# ============================================================================
-# Regras de negócio (confirmadas pelo usuário):
-#   * SALDO FÍSICO de cada item = qtde_empenhada - Σ qtde_recebida
-#     (só diminui quando o material É RECEBIDO, com NF)
-#   * SALDO FINANCEIRO (PAGO / A LIQUIDAR / %):
-#     PAGO       = Σ (qtde_recebida x valor_unitario)  [vem dos RECEBIMENTOS]
-#     A LIQUIDAR = valor_total_do_item - PAGO
-#   * Pedido "incluído" vira "recebido" quando se registra NF + qtde recebida
-
-
-def empenho_para_dict(row):
-    return dict(row)
-
-
-def item_sumario(item):
-    d = dict(item)
-    db = get_db()
-    r = db.execute(
-        "SELECT COALESCE(SUM(r.qtde_recebida),0) as qtde_recebida,"
-        " COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as pago"
-        " FROM recebimentos r LEFT JOIN itens i ON i.id = r.item_id"
-        " WHERE r.item_id = ?",
-        (item["id"],),
-    ).fetchone()
-    d["qtde_recebida"] = r["qtde_recebida"]
-    d["pago"] = r["pago"]
-    d["saldo_fisico"] = max(0, (d["qtde_empenhada"] or 0) - d["qtde_recebida"])
-    d["a_liquidar"] = max(0, (d["valor_total"] or 0) - d["pago"])
-    d["percentual_pago"] = round((d["pago"] / (d["valor_total"] or 1) * 100), 2)
-    d["percentual_fisico"] = round(
-        (d["qtde_recebida"] / (d["qtde_empenhada"] or 1) * 100), 2
-    )
-    return d
-
-
-EPS = 1e-9  # tolerância para comparar quantidades em ponto flutuante
 
 
 def nome_item(item):
@@ -295,49 +274,382 @@ def nome_item(item):
     return f"Item {num} ({item['descricao']})" if num else str(item["descricao"])
 
 
-def resumo_pedidos(db, empenho_id=None, pedido_id=None):
-    """Calcula, por pedido, a qtde pedida/recebida e o STATUS.
+def fmt_qtd(v):
+    return f"{float(v):g}".replace(".", ",")
 
-    Regra única usada em todas as telas (antes cada tela calculava de um jeito):
+
+def fmt_brl(v):
+    return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def parse_data(s):
+    try:
+        return datetime.strptime((s or "")[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def data_br(s):
+    d = parse_data(s)
+    return d.strftime("%d/%m/%Y") if d else (s or "")
+
+
+def erro(msg, status=400):
+    return jsonify({"ok": False, "error": msg}), status
+
+
+# ============================================================================
+# LOGIN (senha única do setor + nome de quem está usando, para o histórico)
+# ============================================================================
+def auth_ativa():
+    return bool(APP_PASSWORD)
+
+
+def usuario_atual():
+    return session.get("nome") or ("local" if not auth_ativa() else "?")
+
+
+ROTAS_LIVRES = {"login", "logout", "static"}
+
+
+@app.before_request
+def exigir_login():
+    if request.endpoint in ROTAS_LIVRES:
+        return None
+    if not auth_ativa():
+        # Sem senha configurada: liberado só no modo local (SQLite).
+        # Em produção (PostgreSQL / Vercel) o sistema fica bloqueado.
+        if USE_POSTGRES:
+            if request.path.startswith("/api/"):
+                return jsonify({"erro": "sem_senha", "mensagem": "Sistema sem senha configurada (APP_PASSWORD)."}), 503
+            return render_template("login.html", sem_senha=True), 503
+        return None
+    if session.get("ok"):
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"erro": "nao_autenticado", "mensagem": "Sua sessão expirou. Entre novamente."}), 401
+    return redirect(url_for("login", next=request.full_path if request.query_string else request.path))
+
+
+@app.context_processor
+def contexto_templates():
+    return {"usuario": session.get("nome"), "auth_ativa": auth_ativa()}
+
+
+def _ip():
+    return (request.headers.get("X-Forwarded-For") or request.remote_addr or "?").split(",")[0].strip()
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not auth_ativa():
+        if USE_POSTGRES:
+            return render_template("login.html", sem_senha=True), 503
+        return redirect("/")
+    erro_msg = None
+    nome = ""
+    if request.method == "POST":
+        db = get_db()
+        nome = (request.form.get("nome") or "").strip()[:60]
+        senha = request.form.get("senha") or ""
+        limite = (datetime.now() - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+        falhas = db.execute(
+            "SELECT COUNT(*) as n FROM login_falhas WHERE ip = ? AND quando > ?", (_ip(), limite)
+        ).fetchone()["n"]
+        if falhas >= 5:
+            erro_msg = "Muitas tentativas erradas. Aguarde 15 minutos e tente de novo."
+        elif not nome:
+            erro_msg = "Informe seu nome (ele aparece no histórico de alterações)."
+        elif not hmac.compare_digest(senha.encode(), APP_PASSWORD.encode()):
+            db.execute("INSERT INTO login_falhas (ip, quando) VALUES (?, ?)", (_ip(), agora()))
+            db.commit()
+            time.sleep(0.5)
+            erro_msg = "Senha incorreta."
+        else:
+            session.clear()
+            session.permanent = True
+            session["ok"] = True
+            session["nome"] = nome
+            db.execute("DELETE FROM login_falhas WHERE ip = ?", (_ip(),))
+            registrar(db, "LOGIN", "sessao", None, None, f"{nome} entrou no sistema")
+            db.commit()
+            destino = request.args.get("next") or "/"
+            if not destino.startswith("/") or destino.startswith("//"):
+                destino = "/"
+            return redirect(destino)
+    return render_template("login.html", erro=erro_msg, nome=nome)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login") if auth_ativa() else "/")
+
+
+# ============================================================================
+# HISTÓRICO (auditoria)
+# ============================================================================
+def registrar(db, acao, entidade, entidade_id, empenho_id, descricao):
+    db.execute(
+        "INSERT INTO auditoria (quando, usuario, acao, entidade, entidade_id, empenho_id, descricao)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (agora(), usuario_atual(), acao, entidade, entidade_id, empenho_id, descricao),
+    )
+
+
+# ============================================================================
+# LIXEIRA: antes de excluir, guarda uma cópia de tudo que vai sumir
+# (inclusive o que sai em cascata) para poder restaurar depois.
+# ============================================================================
+# Ordem de restauração e chaves estrangeiras de cada tabela
+TABELAS_LIXEIRA = [
+    ("empenhos", {}),
+    ("itens", {"empenho_id": "empenhos"}),
+    ("movimentos_item", {"item_id": "itens", "empenho_id": "empenhos"}),
+    ("pedidos", {"empenho_id": "empenhos"}),
+    ("pedido_itens", {"pedido_id": "pedidos", "item_id": "itens"}),
+    ("recebimentos", {"empenho_id": "empenhos", "pedido_id": "pedidos", "item_id": "itens"}),
+    ("pagamentos", {"empenho_id": "empenhos"}),
+]
+
+
+def _linhas(db, sql, params):
+    return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+
+def _in(ids):
+    return ",".join("?" for _ in ids)
+
+
+def snapshot(db, empenho_id=None, item_id=None, pedido_id=None, recebimento_ids=None, pagamento_id=None):
+    s = {t: [] for t, _ in TABELAS_LIXEIRA}
+    if empenho_id is not None:
+        s["empenhos"] = _linhas(db, "SELECT * FROM empenhos WHERE id = ?", (empenho_id,))
+        for t in ("itens", "movimentos_item", "pedidos", "recebimentos", "pagamentos"):
+            s[t] = _linhas(db, f"SELECT * FROM {t} WHERE empenho_id = ?", (empenho_id,))
+        s["pedido_itens"] = _linhas(
+            db, "SELECT pi.* FROM pedido_itens pi JOIN pedidos p ON p.id = pi.pedido_id WHERE p.empenho_id = ?",
+            (empenho_id,))
+    elif item_id is not None:
+        s["itens"] = _linhas(db, "SELECT * FROM itens WHERE id = ?", (item_id,))
+        s["movimentos_item"] = _linhas(db, "SELECT * FROM movimentos_item WHERE item_id = ?", (item_id,))
+        s["pedido_itens"] = _linhas(db, "SELECT * FROM pedido_itens WHERE item_id = ?", (item_id,))
+        s["recebimentos"] = _linhas(db, "SELECT * FROM recebimentos WHERE item_id = ?", (item_id,))
+    elif pedido_id is not None:
+        s["pedidos"] = _linhas(db, "SELECT * FROM pedidos WHERE id = ?", (pedido_id,))
+        s["pedido_itens"] = _linhas(db, "SELECT * FROM pedido_itens WHERE pedido_id = ?", (pedido_id,))
+        s["recebimentos"] = _linhas(db, "SELECT * FROM recebimentos WHERE pedido_id = ?", (pedido_id,))
+    elif recebimento_ids:
+        s["recebimentos"] = _linhas(db, f"SELECT * FROM recebimentos WHERE id IN ({_in(recebimento_ids)})",
+                                    tuple(recebimento_ids))
+    elif pagamento_id is not None:
+        s["pagamentos"] = _linhas(db, "SELECT * FROM pagamentos WHERE id = ?", (pagamento_id,))
+    return s
+
+
+def mandar_para_lixeira(db, tipo, descricao, empenho_id, dados):
+    db.execute(
+        "INSERT INTO lixeira (quando, usuario, tipo, descricao, empenho_id, dados, restaurado) VALUES (?,?,?,?,?,?,0)",
+        (agora(), usuario_atual(), tipo, descricao, empenho_id, json.dumps(dados, default=str)),
+    )
+
+
+def restaurar_snapshot(db, dados):
+    """Reinsere as linhas guardadas (com novos ids), religando as referências.
+    Linhas cujo 'pai' não existe mais são puladas. Retorna (restauradas, puladas)."""
+    mapa = {t: {} for t, _ in TABELAS_LIXEIRA}
+    restauradas = puladas = 0
+
+    def existe(tabela, rid):
+        return db.execute(f"SELECT 1 as x FROM {tabela} WHERE id = ?", (rid,)).fetchone() is not None
+
+    for tabela, fks in TABELAS_LIXEIRA:
+        for linha in dados.get(tabela, []):
+            nova = {k: v for k, v in linha.items() if k != "id" and re.fullmatch(r"[a-z_]+", k)}
+            ok = True
+            for col, pai in fks.items():
+                antigo = nova.get(col)
+                if antigo in mapa[pai]:
+                    nova[col] = mapa[pai][antigo]
+                elif antigo is None or not existe(pai, antigo):
+                    ok = False
+                    break
+            if not ok:
+                puladas += 1
+                continue
+            cols = list(nova.keys())
+            cur = db.execute(
+                f"INSERT INTO {tabela} ({','.join(cols)}) VALUES ({_in(cols)})",
+                tuple(nova[c] for c in cols),
+            )
+            mapa[tabela][linha["id"]] = cur.lastrowid
+            restauradas += 1
+    return restauradas, puladas, mapa
+
+
+# ============================================================================
+# CÁLCULOS (saldos, status, financeiro)
+# ============================================================================
+# Regras de negócio:
+#   * SALDO FÍSICO   = qtde_empenhada − Σ recebido (baixa só com NF)
+#   * RESERVADO      = o que está pedido em pedidos ABERTOS e ainda não chegou
+#   * SALDO A PEDIR  = qtde_empenhada − recebido − reservado
+#   * LIQUIDADO      = Σ (qtde recebida × valor unitário)   [vem das NFs]
+#   * PAGO           = Σ pagamentos (OB) do empenho
+#   * A LIQUIDAR     = valor empenhado − liquidado
+#   * A PAGAR        = liquidado − pago
+#   * qtde_empenhada já reflete reforços/anulações (histórico em movimentos_item)
+
+SQL_ITENS = (
+    "SELECT i.*,"
+    " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id) as qtde_recebida,"
+    " (SELECT COALESCE(SUM(pi.qtde_pedida),0) FROM pedido_itens pi JOIN pedidos p ON p.id = pi.pedido_id"
+    "   WHERE pi.item_id = i.id AND COALESCE(p.encerrado,0) = 0) as pedida_aberta,"
+    " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r JOIN pedidos p ON p.id = r.pedido_id"
+    "   WHERE r.item_id = i.id AND COALESCE(p.encerrado,0) = 0) as recebida_aberta"
+    " FROM itens i"
+)
+
+
+def completar_item(r):
+    d = dict(r)
+    q = float(d["qtde_empenhada"] or 0)
+    vu = float(d["valor_unitario"] or 0)
+    total = float(d["valor_total"] or 0)
+    rec = float(d.pop("qtde_recebida") or 0)
+    reservado = max(0.0, float(d.pop("pedida_aberta") or 0) - float(d.pop("recebida_aberta") or 0))
+    d["qtde_recebida"] = rec
+    d["reservado"] = reservado
+    d["saldo_fisico"] = max(0.0, q - rec)
+    d["saldo_a_pedir"] = max(0.0, q - rec - reservado)
+    d["liquidado"] = rec * vu
+    d["a_liquidar"] = max(0.0, total - d["liquidado"])
+    d["percentual_liquidado"] = round(d["liquidado"] / total * 100, 2) if total else 0
+    d["percentual_fisico"] = round(min(rec, q) / q * 100, 2) if q else 0
+    return d
+
+
+def itens_do_empenho(db, eid):
+    return [completar_item(r) for r in db.execute(SQL_ITENS + " WHERE i.empenho_id = ? ORDER BY i.id", (eid,)).fetchall()]
+
+
+def item_completo(db, iid):
+    r = db.execute(SQL_ITENS + " WHERE i.id = ?", (iid,)).fetchone()
+    return completar_item(r) if r else None
+
+
+def resumo_pedidos(db, empenho_id=None, pedido_id=None):
+    """Por pedido: qtde pedida/recebida, STATUS, vencimento e atraso.
+
+    Regra única usada em todas as telas:
       * Só contam recebimentos de itens que fazem parte do pedido.
-      * RECEBIDO -> todos os itens do pedido chegaram por completo.
-      * PARCIAL  -> algum item já chegou (total ou parcialmente), mas não todos.
-      * INCLUIDO -> nada recebido ainda.
-    Retorna {pedido_id: {"pedida", "recebida", "status", "itens": {item_id: {...}}}}
+      * RECEBIDO  -> todos os itens chegaram por completo.
+      * ENCERRADO -> pedido fechado manualmente (o que faltava foi liberado).
+      * PARCIAL   -> algum item chegou, mas não todos.
+      * INCLUIDO  -> nada recebido ainda.
+      * Atrasado  -> INCLUIDO/PARCIAL com vencimento (data + prazo) já passado.
     """
     filtro, params = "", []
     if pedido_id is not None:
-        filtro, params = " WHERE pi.pedido_id = ?", [pedido_id]
+        filtro, params = " WHERE p.id = ?", [pedido_id]
     elif empenho_id is not None:
-        filtro, params = " JOIN pedidos p ON p.id = pi.pedido_id WHERE p.empenho_id = ?", [empenho_id]
+        filtro, params = " WHERE p.empenho_id = ?", [empenho_id]
+    pedidos = db.execute(
+        "SELECT p.id, p.data_pedido, p.prazo_dias, p.encerrado FROM pedidos p" + filtro, tuple(params)
+    ).fetchall()
     rows = db.execute(
         "SELECT pi.pedido_id, pi.item_id, SUM(pi.qtde_pedida) as pedida,"
         " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r"
         "   WHERE r.pedido_id = pi.pedido_id AND r.item_id = pi.item_id) as recebida"
-        " FROM pedido_itens pi" + filtro +
+        " FROM pedido_itens pi JOIN pedidos p ON p.id = pi.pedido_id" + filtro +
         " GROUP BY pi.pedido_id, pi.item_id",
         tuple(params),
     ).fetchall()
 
-    out = {}
+    out = {p["id"]: {"pedida": 0.0, "recebida": 0.0, "itens": {}, "_p": p} for p in pedidos}
     for r in rows:
-        p = out.setdefault(r["pedido_id"], {"pedida": 0.0, "recebida": 0.0, "itens": {}})
+        p = out.setdefault(r["pedido_id"], {"pedida": 0.0, "recebida": 0.0, "itens": {}, "_p": None})
         pedida = float(r["pedida"] or 0)
         recebida = float(r["recebida"] or 0)
         p["itens"][r["item_id"]] = {"pedida": pedida, "recebida": recebida}
         p["pedida"] += pedida
-        # Recebido a mais num item não "compensa" outro item ainda pendente
         p["recebida"] += min(recebida, pedida)
 
-    for p in out.values():
+    hoje = date.today()
+    for pid, p in out.items():
+        meta = p.pop("_p")
         itens = [i for i in p["itens"].values() if i["pedida"] > 0]
-        if itens and all(i["recebida"] + EPS >= i["pedida"] for i in itens):
+        completo = bool(itens) and all(i["recebida"] + EPS >= i["pedida"] for i in itens)
+        if completo:
             p["status"] = "RECEBIDO"
+        elif meta is not None and meta["encerrado"]:
+            p["status"] = "ENCERRADO"
         elif any(i["recebida"] > 0 for i in itens):
             p["status"] = "PARCIAL"
         else:
             p["status"] = "INCLUIDO"
+        venc = None
+        if meta is not None and meta["prazo_dias"] and parse_data(meta["data_pedido"]):
+            venc = parse_data(meta["data_pedido"]) + timedelta(days=int(meta["prazo_dias"]))
+        p["vencimento"] = venc.isoformat() if venc else None
+        aberto = p["status"] in ("INCLUIDO", "PARCIAL")
+        p["dias_atraso"] = (hoje - venc).days if (venc and aberto and hoje > venc) else 0
+        p["atrasado"] = p["dias_atraso"] > 0
     return out
+
+
+def financeiro_empenhos(db):
+    """Empenhado, liquidado e pago por empenho (uma consulta só)."""
+    rows = db.execute(
+        "SELECT e.*,"
+        " (SELECT COALESCE(SUM(i.valor_total),0) FROM itens i WHERE i.empenho_id = e.id) as valor_empenhado,"
+        " (SELECT COALESCE(SUM(r.qtde_recebida * i2.valor_unitario),0)"
+        "   FROM recebimentos r JOIN itens i2 ON i2.id = r.item_id WHERE i2.empenho_id = e.id) as valor_liquidado,"
+        " (SELECT COALESCE(SUM(pg.valor),0) FROM pagamentos pg WHERE pg.empenho_id = e.id) as valor_pago,"
+        " (SELECT COUNT(*) FROM itens i3 WHERE i3.empenho_id = e.id AND i3.qtde_empenhada > 0) as qt_itens,"
+        " (SELECT COUNT(*) FROM itens i4 WHERE i4.empenho_id = e.id AND i4.qtde_empenhada > 0"
+        "   AND (SELECT COALESCE(SUM(r2.qtde_recebida),0) FROM recebimentos r2 WHERE r2.item_id = i4.id)"
+        "       + 1e-9 < i4.qtde_empenhada) as qt_itens_pendentes"
+        " FROM empenhos e ORDER BY e.id DESC"
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        emp = float(d["valor_empenhado"] or 0)
+        liq = float(d["valor_liquidado"] or 0)
+        pago = float(d["valor_pago"] or 0)
+        d.update(valor_empenhado=emp, valor_liquidado=liq, valor_pago=pago)
+        d["a_liquidar"] = max(0.0, emp - liq)
+        d["a_pagar"] = max(0.0, liq - pago)
+        d["percentual_liquidado"] = round(liq / emp * 100, 2) if emp else 0
+        d["percentual_pago"] = round(pago / emp * 100, 2) if emp else 0
+        if not d["qt_itens"]:
+            d["situacao"] = "SEM_ITENS"
+        elif d["qt_itens_pendentes"]:
+            d["situacao"] = "ANDAMENTO"
+        else:
+            d["situacao"] = "CONCLUIDO"
+        m = re.match(r"\s*(\d{4})", d.get("ne") or "")
+        d["ano"] = m.group(1) if m else (d.get("criado_em") or "")[:4]
+        out.append(d)
+    return out
+
+
+def liquidado_e_pago(db, eid):
+    liq = db.execute(
+        "SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v"
+        " FROM recebimentos r JOIN itens i ON i.id = r.item_id WHERE i.empenho_id = ?", (eid,)
+    ).fetchone()["v"]
+    pago = db.execute("SELECT COALESCE(SUM(valor),0) as v FROM pagamentos WHERE empenho_id = ?", (eid,)).fetchone()["v"]
+    return float(liq or 0), float(pago or 0)
+
+
+# ============================================================================
+# PÁGINAS
+# ============================================================================
+@app.route("/")
+def index():
+    return render_template("index.html")
 
 
 @app.route("/empenhos")
@@ -345,28 +657,27 @@ def pag_empenhos():
     return render_template("empenhos.html")
 
 
+@app.route("/historico")
+def pag_historico():
+    return render_template("historico.html")
+
+
+# ============================================================================
+# EMPENHOS
+# ============================================================================
 @app.route("/api/empenhos")
 def api_lista_empenhos():
     db = get_db()
-    rows = db.execute(
-        "SELECT e.*,"
-        " (SELECT COALESCE(SUM(i.valor_total),0) FROM itens i WHERE i.empenho_id = e.id) as valor_empenhado,"
-        " (SELECT COALESCE(SUM(r.qtde_recebida * i2.valor_unitario),0)"
-        "   FROM recebimentos r JOIN itens i2 ON i2.id = r.item_id"
-        "   WHERE i2.empenho_id = e.id) as valor_pago"
-        " FROM empenhos e ORDER BY e.id DESC"
-    ).fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["valor_empenhado"] = d["valor_empenhado"] or 0
-        d["valor_pago"] = d["valor_pago"] or 0
-        d["a_liquidar"] = max(0, d["valor_empenhado"] - d["valor_pago"])
-        d["percentual_pago"] = round(
-            (d["valor_pago"] / (d["valor_empenhado"] or 1) * 100), 2
-        )
-        out.append(d)
-    return jsonify(out)
+    lista = financeiro_empenhos(db)
+    resumo = resumo_pedidos(db)
+    atrasos = {}
+    pid_emp = {r["id"]: r["empenho_id"] for r in db.execute("SELECT id, empenho_id FROM pedidos").fetchall()}
+    for pid, p in resumo.items():
+        if p["atrasado"]:
+            atrasos[pid_emp.get(pid)] = atrasos.get(pid_emp.get(pid), 0) + 1
+    for d in lista:
+        d["pedidos_atrasados"] = atrasos.get(d["id"], 0)
+    return jsonify(lista)
 
 
 @app.route("/api/empenhos", methods=["POST"])
@@ -376,17 +687,37 @@ def api_criar_empenho():
     processo = (data.get("processo") or "").strip()
     nome_credor = (data.get("nome_credor") or "").strip().upper()
     if not ne:
-        return jsonify({"ok": False, "error": "Informe o número do empenho (NE)"}), 400
+        return erro("Informe o número do empenho (NE)")
     if not nome_credor:
-        return jsonify({"ok": False, "error": "Informe o credor"}), 400
-
+        return erro("Informe o credor")
     db = get_db()
     cur = db.execute(
         "INSERT INTO empenhos (ne, processo, nome_credor, criado_em) VALUES (?,?,?,?)",
-        (ne, processo, nome_credor, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        (ne, processo, nome_credor, agora()),
     )
+    registrar(db, "CRIAR", "empenho", cur.lastrowid, cur.lastrowid, f"Empenho {ne} criado ({nome_credor})")
     db.commit()
     return jsonify({"ok": True, "id": cur.lastrowid})
+
+
+@app.route("/api/empenhos/<int:eid>", methods=["PUT"])
+def api_editar_empenho(eid):
+    data = request.json or {}
+    db = get_db()
+    e = db.execute("SELECT * FROM empenhos WHERE id = ?", (eid,)).fetchone()
+    if not e:
+        return erro("Empenho não encontrado", 404)
+    ne = (data.get("ne") or "").strip()
+    credor = (data.get("nome_credor") or "").strip().upper()
+    processo = (data.get("processo") or "").strip()
+    if not ne or not credor:
+        return erro("NE e credor são obrigatórios")
+    db.execute("UPDATE empenhos SET ne=?, processo=?, nome_credor=? WHERE id=?", (ne, processo, credor, eid))
+    mud = [f"{c}: {e[k] or '—'} → {v or '—'}" for c, k, v in
+           (("NE", "ne", ne), ("Credor", "nome_credor", credor), ("Processo", "processo", processo)) if (e[k] or "") != v]
+    registrar(db, "EDITAR", "empenho", eid, eid, f"Empenho {ne} editado" + (": " + "; ".join(mud) if mud else ""))
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/empenhos/<int:eid>")
@@ -394,32 +725,40 @@ def api_detalhe_empenho(eid):
     db = get_db()
     empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (eid,)).fetchone()
     if not empenho:
-        return jsonify({"ok": False, "error": "Empenho não encontrado"}), 404
-    itens = [item_sumario(r) for r in db.execute(
-        "SELECT * FROM itens WHERE empenho_id = ? ORDER BY id", (eid,)
-    ).fetchall()]
-    pedidos = db.execute(
+        return erro("Empenho não encontrado", 404)
+    itens = itens_do_empenho(db, eid)
+    resumo = resumo_pedidos(db, empenho_id=eid)
+    pedidos = []
+    for p in db.execute(
         "SELECT p.*,"
         " (SELECT COUNT(*) FROM pedido_itens pi WHERE pi.pedido_id = p.id) as qt_itens,"
         " (SELECT COUNT(*) FROM recebimentos r WHERE r.pedido_id = p.id) as qt_recebimentos"
-        " FROM pedidos p WHERE p.empenho_id = ? ORDER BY p.id DESC",
-        (eid,),
-    ).fetchall()
-    resumo = resumo_pedidos(db, empenho_id=eid)
-
-    pedido_lista = []
-    for p in pedidos:
+        " FROM pedidos p WHERE p.empenho_id = ? ORDER BY p.id DESC", (eid,)
+    ).fetchall():
         pd = dict(p)
-        rs = resumo.get(pd["id"], {"pedida": 0, "recebida": 0, "status": "INCLUIDO"})
-        pd["qtde_total_pedida"] = rs["pedida"]
-        pd["qtde_total_recebida"] = rs["recebida"]
-        pd["status"] = rs["status"]
-        pedido_lista.append(pd)
-
+        rs = resumo.get(pd["id"], {})
+        pd["qtde_total_pedida"] = rs.get("pedida", 0)
+        pd["qtde_total_recebida"] = rs.get("recebida", 0)
+        pd["status"] = rs.get("status", "INCLUIDO")
+        pd["vencimento"] = rs.get("vencimento")
+        pd["dias_atraso"] = rs.get("dias_atraso", 0)
+        pedidos.append(pd)
+    pagamentos = _linhas(db, "SELECT * FROM pagamentos WHERE empenho_id = ? ORDER BY data_pagamento DESC, id DESC", (eid,))
+    movimentos = _linhas(
+        db, "SELECT m.*, i.numero_item, i.descricao, i.und FROM movimentos_item m JOIN itens i ON i.id = m.item_id"
+            " WHERE m.empenho_id = ? ORDER BY m.id DESC", (eid,))
+    liq, pago = liquidado_e_pago(db, eid)
+    empenhado = sum(i["valor_total"] or 0 for i in itens)
     return jsonify({
         "empenho": dict(empenho),
         "itens": itens,
-        "pedidos": pedido_lista,
+        "pedidos": pedidos,
+        "pagamentos": pagamentos,
+        "movimentos": movimentos,
+        "financeiro": {
+            "empenhado": empenhado, "liquidado": liq, "pago": pago,
+            "a_liquidar": max(0.0, empenhado - liq), "a_pagar": max(0.0, liq - pago),
+        },
     })
 
 
@@ -428,119 +767,212 @@ def api_excluir_empenho(eid):
     db = get_db()
     empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (eid,)).fetchone()
     if not empenho:
-        return jsonify({"ok": False, "error": "Empenho não encontrado"}), 404
+        return erro("Empenho não encontrado", 404)
+    desc = f"Empenho {empenho['ne']} ({empenho['nome_credor']}) com itens, pedidos, NFs e pagamentos"
+    mandar_para_lixeira(db, "empenho", desc, eid, snapshot(db, empenho_id=eid))
     db.execute("DELETE FROM empenhos WHERE id = ?", (eid,))
+    registrar(db, "EXCLUIR", "empenho", eid, eid, f"Empenho {empenho['ne']} enviado para a lixeira")
     db.commit()
     return jsonify({"ok": True, "ne": empenho["ne"]})
 
 
+# ============================================================================
+# ITENS
+# ============================================================================
+def _inserir_item(db, eid, numero_item, descricao, und, qtde, vu):
+    cur = db.execute(
+        "INSERT INTO itens (empenho_id, numero_item, descricao, und, qtde_empenhada, valor_unitario, valor_total, criado_em)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (eid, numero_item, descricao, und, qtde, vu, qtde * vu, agora()),
+    )
+    return cur.lastrowid
+
+
 @app.route("/api/empenhos/<int:eid>/itens", methods=["POST"])
 def api_incluir_varios_itens(eid):
-    """Inclui vários itens de uma vez no empenho.
-
-    Body: { itens: [{numero_item, descricao, und, qtde_empenhada, valor_unitario}] }
-    Retorna a lista dos itens criados (com ids) e o total somado.
-    """
+    """Body: { itens: [{numero_item, descricao, und, qtde_empenhada, valor_unitario}] }"""
     db = get_db()
     empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (eid,)).fetchone()
     if not empenho:
-        return jsonify({"ok": False, "error": "Empenho não encontrado"}), 404
-
-    data = request.json or {}
-    itens = data.get("itens") or []
+        return erro("Empenho não encontrado", 404)
     valido = []
-    for it in itens:
+    for it in (request.json or {}).get("itens") or []:
         descricao = (it.get("descricao") or "").strip()
         if not descricao:
             continue
-        numero_item = (it.get("numero_item") or "").strip()
-        und = (it.get("und") or "").strip()
         qtde = parse_money(it.get("qtde_empenhada"))
-        valor_unitario = parse_money(it.get("valor_unitario"))
-        valido.append((numero_item, descricao, und, qtde, valor_unitario))
-
+        vu = parse_money(it.get("valor_unitario"))
+        if qtde < 0 or vu < 0:
+            return erro(f"{descricao}: quantidade e valor não podem ser negativos")
+        valido.append(((it.get("numero_item") or "").strip(), descricao, (it.get("und") or "").strip(), qtde, vu))
     if not valido:
-        return jsonify({"ok": False, "error": "Informe ao menos um item com descrição"}), 400
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    criados = []
-    total_geral = 0.0
-    for numero_item, descricao, und, qtde, valor_unitario in valido:
-        valor_total = qtde * valor_unitario
-        cur = db.execute(
-            "INSERT INTO itens (empenho_id, numero_item, descricao, und, qtde_empenhada, valor_unitario, valor_total, criado_em)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (eid, numero_item, descricao, und, qtde, valor_unitario, valor_total, now),
-        )
-        criados.append({
-            "id": cur.lastrowid, "numero_item": numero_item, "descricao": descricao,
-            "und": und, "qtde_empenhada": qtde, "valor_unitario": valor_unitario,
-            "valor_total": valor_total,
-        })
-        total_geral += valor_total
-
+        return erro("Informe ao menos um item com descrição")
+    criados, total = [], 0.0
+    for numero_item, descricao, und, qtde, vu in valido:
+        iid = _inserir_item(db, eid, numero_item, descricao, und, qtde, vu)
+        criados.append({"id": iid, "numero_item": numero_item, "descricao": descricao, "und": und,
+                        "qtde_empenhada": qtde, "valor_unitario": vu, "valor_total": qtde * vu})
+        total += qtde * vu
+    registrar(db, "CRIAR", "item", None, eid,
+              f"{len(criados)} item(ns) incluído(s) no empenho {empenho['ne']} — total {fmt_brl(total)}")
     db.commit()
-    return jsonify({"ok": True, "itens": criados, "quantidade": len(criados), "valor_total": total_geral})
+    return jsonify({"ok": True, "itens": criados, "quantidade": len(criados), "valor_total": total})
 
 
 @app.route("/api/itens", methods=["POST"])
 def api_criar_item():
     data = request.json or {}
-    empenho_id = data.get("empenho_id")
-    numero_item = (data.get("numero_item") or "").strip()
+    eid = data.get("empenho_id")
     descricao = (data.get("descricao") or "").strip()
-    und = (data.get("und") or "").strip()
-    qtde = parse_money(data.get("qtde_empenhada"))
-    valor_unitario = parse_money(data.get("valor_unitario"))
-    valor_total = qtde * valor_unitario
-    if not empenho_id:
-        return jsonify({"ok": False, "error": "Faltou o identificador do empenho"}), 400
+    if not eid:
+        return erro("Faltou o identificador do empenho")
     if not descricao:
-        return jsonify({"ok": False, "error": "Informe a descrição do item"}), 400
-
+        return erro("Informe a descrição do item")
     db = get_db()
-    cur = db.execute(
-        "INSERT INTO itens (empenho_id, numero_item, descricao, und, qtde_empenhada, valor_unitario, valor_total, criado_em)"
-        " VALUES (?,?,?,?,?,?,?,?)",
-        (
-            empenho_id, numero_item, descricao, und,
-            qtde, valor_unitario, valor_total,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        ),
-    )
+    if not db.execute("SELECT 1 as x FROM empenhos WHERE id = ?", (eid,)).fetchone():
+        return erro("Empenho não encontrado", 404)
+    qtde = parse_money(data.get("qtde_empenhada"))
+    vu = parse_money(data.get("valor_unitario"))
+    iid = _inserir_item(db, eid, (data.get("numero_item") or "").strip(), descricao, (data.get("und") or "").strip(), qtde, vu)
+    registrar(db, "CRIAR", "item", iid, eid, f"Item {descricao} incluído")
     db.commit()
-    return jsonify({"ok": True, "id": cur.lastrowid, "valor_total": valor_total})
+    return jsonify({"ok": True, "id": iid, "valor_total": qtde * vu})
 
 
 @app.route("/api/itens/<int:iid>", methods=["PUT"])
 def api_editar_item(iid):
     data = request.json or {}
     db = get_db()
-    item = db.execute("SELECT * FROM itens WHERE id = ?", (iid,)).fetchone()
+    item = item_completo(db, iid)
     if not item:
-        return jsonify({"ok": False, "error": "Item não encontrado"}), 404
-
+        return erro("Item não encontrado", 404)
     descricao = (data.get("descricao") or item["descricao"] or "").strip()
     numero_item = (data.get("numero_item") if data.get("numero_item") is not None else item["numero_item"] or "").strip()
     und = (data.get("und") if data.get("und") is not None else item["und"] or "").strip()
     qtde = parse_money(data.get("qtde_empenhada", item["qtde_empenhada"]))
-    valor_unitario = parse_money(data.get("valor_unitario", item["valor_unitario"]))
-    valor_total = qtde * valor_unitario
-
+    vu = parse_money(data.get("valor_unitario", item["valor_unitario"]))
+    # Não deixa a quantidade ficar abaixo do que já foi recebido + o que está pedido
+    comprometido = item["qtde_recebida"] + item["reservado"]
+    if qtde + EPS < comprometido:
+        return erro(f"A quantidade não pode ficar abaixo de {fmt_qtd(comprometido)} "
+                    f"(já recebido {fmt_qtd(item['qtde_recebida'])} + pedido em aberto {fmt_qtd(item['reservado'])})")
+    if vu < 0:
+        return erro("Valor unitário não pode ser negativo")
+    # Mudar o valor unitário altera o liquidado: não pode ficar abaixo do já pago
+    liq, pago = liquidado_e_pago(db, item["empenho_id"])
+    novo_liq = liq - item["qtde_recebida"] * float(item["valor_unitario"] or 0) + item["qtde_recebida"] * vu
+    if novo_liq + 0.005 < pago:
+        return erro(f"Com esse valor unitário o liquidado ({fmt_brl(novo_liq)}) ficaria abaixo do já pago ({fmt_brl(pago)})")
     db.execute(
         "UPDATE itens SET numero_item=?, descricao=?, und=?, qtde_empenhada=?, valor_unitario=?, valor_total=? WHERE id=?",
-        (numero_item, descricao, und, qtde, valor_unitario, valor_total, iid),
+        (numero_item, descricao, und, qtde, vu, qtde * vu, iid),
     )
+    mud = []
+    if abs(qtde - float(item["qtde_empenhada"] or 0)) > EPS:
+        mud.append(f"qtde {fmt_qtd(item['qtde_empenhada'])} → {fmt_qtd(qtde)}")
+    if abs(vu - float(item["valor_unitario"] or 0)) > EPS:
+        mud.append(f"valor unit. {fmt_brl(item['valor_unitario'])} → {fmt_brl(vu)}")
+    if descricao != item["descricao"]:
+        mud.append(f"descrição '{item['descricao']}' → '{descricao}'")
+    registrar(db, "EDITAR", "item", iid, item["empenho_id"],
+              f"Item {descricao} editado" + (": " + "; ".join(mud) if mud else ""))
     db.commit()
-    return jsonify({"ok": True, "valor_total": valor_total})
+    return jsonify({"ok": True, "valor_total": qtde * vu})
+
+
+@app.route("/api/itens/<int:iid>/movimentos", methods=["POST"])
+def api_movimento_item(iid):
+    """Reforço (aumenta) ou anulação (reduz) a quantidade empenhada do item."""
+    data = request.json or {}
+    db = get_db()
+    item = item_completo(db, iid)
+    if not item:
+        return erro("Item não encontrado", 404)
+    tipo = (data.get("tipo") or "").upper()
+    if tipo not in ("REFORCO", "ANULACAO"):
+        return erro("Tipo deve ser reforço ou anulação")
+    qtde = parse_money(data.get("qtde"))
+    if qtde <= 0:
+        return erro("Informe uma quantidade maior que zero")
+    if tipo == "ANULACAO" and qtde > item["saldo_a_pedir"] + EPS:
+        return erro(f"Só é possível anular até o saldo a pedir ({fmt_qtd(item['saldo_a_pedir'])} {item['und'] or ''})".strip())
+    nova = float(item["qtde_empenhada"] or 0) + (qtde if tipo == "REFORCO" else -qtde)
+    vu = float(item["valor_unitario"] or 0)
+    db.execute("UPDATE itens SET qtde_empenhada=?, valor_total=? WHERE id=?", (nova, nova * vu, iid))
+    db.execute(
+        "INSERT INTO movimentos_item (item_id, empenho_id, tipo, qtde, data, documento, observacoes, criado_em)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (iid, item["empenho_id"], tipo, qtde, (data.get("data") or date.today().isoformat())[:10],
+         (data.get("documento") or "").strip(), (data.get("observacoes") or "").strip(), agora()),
+    )
+    rotulo = "Reforço" if tipo == "REFORCO" else "Anulação"
+    registrar(db, tipo, "item", iid, item["empenho_id"],
+              f"{rotulo} de {fmt_qtd(qtde)} {item['und'] or ''} em {nome_item(item)} ({fmt_brl(qtde * vu)})"
+              + (f" — doc. {data.get('documento')}" if data.get("documento") else ""))
+    db.commit()
+    return jsonify({"ok": True, "qtde_empenhada": nova})
 
 
 @app.route("/api/itens/<int:iid>", methods=["DELETE"])
 def api_excluir_item(iid):
     db = get_db()
+    item = db.execute("SELECT * FROM itens WHERE id = ?", (iid,)).fetchone()
+    if not item:
+        return erro("Item não encontrado", 404)
+    eid = item["empenho_id"]
+    # Excluir o item apaga as NFs dele, reduzindo o liquidado
+    liq, pago = liquidado_e_pago(db, eid)
+    rec = db.execute("SELECT COALESCE(SUM(qtde_recebida),0) as v FROM recebimentos WHERE item_id = ?", (iid,)).fetchone()["v"]
+    if liq - float(rec or 0) * float(item["valor_unitario"] or 0) + 0.005 < pago:
+        return erro("Este item já tem valor pago (OB). Exclua o pagamento antes de excluir o item.")
+    mandar_para_lixeira(db, "item", f"{nome_item(item)} com pedidos/NFs ligados a ele", eid, snapshot(db, item_id=iid))
     db.execute("DELETE FROM itens WHERE id = ?", (iid,))
+    registrar(db, "EXCLUIR", "item", iid, eid, f"{nome_item(item)} enviado para a lixeira")
     db.commit()
     return jsonify({"ok": True})
+
+
+# ============================================================================
+# PEDIDOS
+# ============================================================================
+def _validar_itens_pedido(db, empenho_id, itens, pedido_id=None):
+    """Confere quantidades contra o SALDO A PEDIR (que já desconta outros pedidos
+    abertos). Na edição, o próprio pedido não conta como reserva e cada item não
+    pode ficar abaixo do que já foi recebido nele."""
+    atuais, encerrado = {}, False
+    if pedido_id is not None:
+        rs = resumo_pedidos(db, pedido_id=pedido_id).get(pedido_id, {"itens": {}})
+        atuais = rs["itens"]
+        encerrado = rs.get("status") == "ENCERRADO"
+    validos, vistos = [], set()
+    for it in itens:
+        qtde = parse_money(it.get("qtde_pedida"))
+        try:
+            item_id = int(it.get("item_id"))
+        except (TypeError, ValueError):
+            return None, "Item inválido"
+        no_ped = atuais.get(item_id, {"pedida": 0.0, "recebida": 0.0})
+        if qtde <= 0 and no_ped["recebida"] <= 0:
+            continue
+        item = item_completo(db, item_id)
+        if not item or item["empenho_id"] != int(empenho_id):
+            return None, "Item não pertence a este empenho"
+        if qtde + EPS < no_ped["recebida"]:
+            return None, f"{nome_item(item)}: já foram recebidos {fmt_qtd(no_ped['recebida'])} neste pedido"
+        # O que este pedido já reservava volta ao saldo durante a edição
+        reserva_propria = 0.0 if encerrado else max(0.0, no_ped["pedida"] - no_ped["recebida"])
+        maximo = no_ped["recebida"] + item["saldo_a_pedir"] + reserva_propria
+        if qtde > maximo + EPS:
+            return None, (f"{nome_item(item)}: pedido de {fmt_qtd(qtde)} maior que o saldo a pedir "
+                          f"(máximo {fmt_qtd(maximo)} {item['und'] or ''})".rstrip())
+        validos.append((item_id, qtde))
+        vistos.add(item_id)
+    # Na edição, item que já teve entrega não pode sair do pedido
+    for item_id, q in atuais.items():
+        if q["recebida"] > 0 and item_id not in vistos:
+            item = item_completo(db, item_id)
+            return None, f"{nome_item(item)} já teve entrega neste pedido e não pode ser removido"
+    return validos, None
 
 
 @app.route("/api/pedidos", methods=["POST"])
@@ -548,122 +980,159 @@ def api_criar_pedido():
     data = request.json or {}
     empenho_id = data.get("empenho_id")
     numero_pedido = (data.get("numero_pedido") or "").strip()
-    data_pedido = (data.get("data_pedido") or "").strip()
-    observacoes = (data.get("observacoes") or "").strip()
-    itens = data.get("itens") or []  # [{item_id, qtde_pedida}]
-
     if not empenho_id:
-        return jsonify({"ok": False, "error": "Faltou o identificador do empenho"}), 400
+        return erro("Faltou o identificador do empenho")
     if not numero_pedido:
-        return jsonify({"ok": False, "error": "Informe o número do pedido"}), 400
-    if not itens or not any(float(i.get("qtde_pedida") or 0) > 0 for i in itens):
-        return jsonify({"ok": False, "error": "Informe pelo menos um item com quantidade pedida"}), 400
-
+        return erro("Informe o número do pedido")
     db = get_db()
-    # Não deixa pedir mais do que o saldo físico do item (nem item de outro empenho)
-    for it in itens:
-        qtde = float(it.get("qtde_pedida") or 0)
-        if qtde <= 0:
-            continue
-        item = db.execute(
-            "SELECT i.*, (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id) as recebida"
-            " FROM itens i WHERE i.id = ? AND i.empenho_id = ?",
-            (it.get("item_id"), empenho_id),
-        ).fetchone()
-        if not item:
-            return jsonify({"ok": False, "error": "Item não pertence a este empenho"}), 400
-        saldo = max(0, float(item["qtde_empenhada"] or 0) - float(item["recebida"] or 0))
-        if qtde > saldo + EPS:
-            return jsonify({"ok": False, "error": f"{nome_item(item)}: pedido de {qtde:g} maior que o saldo de {saldo:g}"}), 400
-
+    empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (empenho_id,)).fetchone()
+    if not empenho:
+        return erro("Empenho não encontrado", 404)
+    validos, msg = _validar_itens_pedido(db, empenho_id, data.get("itens") or [])
+    if msg:
+        return erro(msg)
+    if not validos:
+        return erro("Informe pelo menos um item com quantidade pedida")
+    prazo = data.get("prazo_dias")
+    prazo = int(prazo) if str(prazo or "").strip().isdigit() else None
     cur = db.execute(
-        "INSERT INTO pedidos (empenho_id, numero_pedido, data_pedido, observacoes, criado_em)"
-        " VALUES (?,?,?,?,?)",
-        (empenho_id, numero_pedido, data_pedido, observacoes,
-         datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        "INSERT INTO pedidos (empenho_id, numero_pedido, data_pedido, observacoes, criado_em, prazo_dias, encerrado)"
+        " VALUES (?,?,?,?,?,?,0)",
+        (empenho_id, numero_pedido, (data.get("data_pedido") or date.today().isoformat())[:10],
+         (data.get("observacoes") or "").strip(), agora(), prazo),
     )
     pedido_id = cur.lastrowid
-    for it in itens:
-        qtde = float(it.get("qtde_pedida") or 0)
-        if qtde > 0:
-            db.execute(
-                "INSERT INTO pedido_itens (pedido_id, item_id, qtde_pedida) VALUES (?,?,?)",
-                (pedido_id, it.get("item_id"), qtde),
-            )
+    for item_id, qtde in validos:
+        db.execute("INSERT INTO pedido_itens (pedido_id, item_id, qtde_pedida) VALUES (?,?,?)", (pedido_id, item_id, qtde))
+    registrar(db, "CRIAR", "pedido", pedido_id, empenho_id,
+              f"Pedido {numero_pedido} criado com {len(validos)} item(ns)" + (f", prazo {prazo} dias" if prazo else ""))
     db.commit()
     return jsonify({"ok": True, "id": pedido_id})
 
 
-@app.route("/api/pedidos/<int:pid>", methods=["GET"])
-def api_detalhe_pedido(pid):
-    """Retorna os dados do pedido: itens solicitados e recebimentos (NFs)."""
+@app.route("/api/pedidos/<int:pid>", methods=["PUT"])
+def api_editar_pedido(pid):
+    data = request.json or {}
     db = get_db()
     pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
     if not pedido:
-        return jsonify({"ok": False, "error": "Pedido não encontrado"}), 404
+        return erro("Pedido não encontrado", 404)
+    numero = (data.get("numero_pedido") or "").strip()
+    if not numero:
+        return erro("Informe o número do pedido")
+    validos, msg = _validar_itens_pedido(db, pedido["empenho_id"], data.get("itens") or [], pedido_id=pid)
+    if msg:
+        return erro(msg)
+    if not validos or not any(q > 0 for _, q in validos):
+        return erro("O pedido precisa ter ao menos um item")
+    prazo = data.get("prazo_dias")
+    prazo = int(prazo) if str(prazo or "").strip().isdigit() else None
+    db.execute(
+        "UPDATE pedidos SET numero_pedido=?, data_pedido=?, observacoes=?, prazo_dias=? WHERE id=?",
+        (numero, (data.get("data_pedido") or pedido["data_pedido"] or "")[:10],
+         (data.get("observacoes") or "").strip(), prazo, pid),
+    )
+    db.execute("DELETE FROM pedido_itens WHERE pedido_id = ?", (pid,))
+    for item_id, qtde in validos:
+        if qtde > 0:
+            db.execute("INSERT INTO pedido_itens (pedido_id, item_id, qtde_pedida) VALUES (?,?,?)", (pid, item_id, qtde))
+    registrar(db, "EDITAR", "pedido", pid, pedido["empenho_id"], f"Pedido {numero} editado")
+    db.commit()
+    return jsonify({"ok": True})
 
+
+@app.route("/api/pedidos/<int:pid>/encerrar", methods=["POST"])
+def api_encerrar_pedido(pid):
+    """Encerra (ou reabre) um pedido parcial: o que faltava chegar volta ao saldo a pedir."""
+    data = request.json or {}
+    reabrir = bool(data.get("reabrir"))
+    db = get_db()
+    pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
+    if not pedido:
+        return erro("Pedido não encontrado", 404)
+    if reabrir:
+        # Reabrir volta a reservar o que falta: confere se ainda há saldo
+        rs = resumo_pedidos(db, pedido_id=pid)[pid]
+        for item_id, q in rs["itens"].items():
+            falta = max(0.0, q["pedida"] - q["recebida"])
+            item = item_completo(db, item_id)
+            if falta > item["saldo_a_pedir"] + EPS:
+                return erro(f"Não há saldo para reabrir: {nome_item(item)} precisa de {fmt_qtd(falta)}, "
+                            f"saldo a pedir {fmt_qtd(item['saldo_a_pedir'])}")
+        db.execute("UPDATE pedidos SET encerrado = 0, encerrado_em = NULL WHERE id = ?", (pid,))
+        registrar(db, "EDITAR", "pedido", pid, pedido["empenho_id"], f"Pedido {pedido['numero_pedido']} reaberto")
+    else:
+        db.execute("UPDATE pedidos SET encerrado = 1, encerrado_em = ? WHERE id = ?", (agora(), pid))
+        registrar(db, "ENCERRAR", "pedido", pid, pedido["empenho_id"],
+                  f"Pedido {pedido['numero_pedido']} encerrado — o que faltava voltou ao saldo a pedir")
+    db.commit()
+    return jsonify({"ok": True})
+
+
+def _grupos_nf(recs):
+    """Agrupa as linhas de recebimento por NF + data (uma 'nota')."""
+    grupos = []
+    for r in recs:
+        chave = ((r["nf"] or "").strip(), r["data_recebimento"] or "")
+        gr = next((x for x in grupos if x["_k"] == chave), None)
+        item = {"item_id": r["item_id"], "numero_item": r["numero_item"], "descricao": r["descricao"],
+                "und": r["und"], "qtde_recebida": r["qtde_recebida"], "valor_unitario": r["valor_unitario"]}
+        if gr is None:
+            grupos.append({"_k": chave, "ids": [r["id"]], "nf": r["nf"] or "—",
+                           "data_recebimento": r["data_recebimento"], "observacoes": r["observacoes"],
+                           "itens": [item]})
+        else:
+            gr["ids"].append(r["id"])
+            gr["itens"].append(item)
+    for gr in grupos:
+        gr.pop("_k")
+        gr["valor"] = sum(float(i["qtde_recebida"] or 0) * float(i["valor_unitario"] or 0) for i in gr["itens"])
+    return grupos
+
+
+@app.route("/api/pedidos/<int:pid>", methods=["GET"])
+def api_detalhe_pedido(pid):
+    """Itens do pedido (com o que falta receber) e as NFs registradas."""
+    db = get_db()
+    pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
+    if not pedido:
+        return erro("Pedido não encontrado", 404)
     empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (pedido["empenho_id"],)).fetchone()
+    rs = resumo_pedidos(db, pedido_id=pid)[pid]
 
-    itens_pedido = db.execute(
-        "SELECT pi.item_id, i.numero_item, i.descricao, i.und, i.valor_unitario, i.valor_total,"
-        " pi.qtde_pedida,"
-        " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = pi.item_id AND r.pedido_id = ?) as qtde_recebida"
-        " FROM pedido_itens pi JOIN itens i ON i.id = pi.item_id"
-        " WHERE pi.pedido_id = ? ORDER BY i.id",
-        (pid, pid),
-    ).fetchall()
+    itens = []
+    for i in db.execute(
+        "SELECT pi.item_id, i.numero_item, i.descricao, i.und, i.valor_unitario, pi.qtde_pedida"
+        " FROM pedido_itens pi JOIN itens i ON i.id = pi.item_id WHERE pi.pedido_id = ? ORDER BY i.id", (pid,)
+    ).fetchall():
+        d = dict(i)
+        comp = item_completo(db, d["item_id"])
+        rec = rs["itens"].get(d["item_id"], {}).get("recebida", 0.0)
+        d["qtde_recebida"] = rec
+        d["saldo_fisico"] = comp["saldo_fisico"]
+        d["saldo_a_pedir"] = comp["saldo_a_pedir"]
+        d["pendente"] = 0.0 if pedido["encerrado"] else max(0.0, min(float(d["qtde_pedida"]) - rec, comp["saldo_fisico"]))
+        d["valor_pedido"] = float(d["qtde_pedida"]) * float(d["valor_unitario"] or 0)
+        itens.append(d)
 
     recs = db.execute(
-        "SELECT r.id, r.nf, r.data_recebimento, r.observacoes, r.item_id,"
-        " i.numero_item, i.descricao, i.und, r.qtde_recebida"
-        " FROM recebimentos r LEFT JOIN itens i ON i.id = r.item_id"
-        " WHERE r.pedido_id = ? ORDER BY r.id",
-        (pid,),
+        "SELECT r.id, r.nf, r.data_recebimento, r.observacoes, r.item_id, r.qtde_recebida,"
+        " i.numero_item, i.descricao, i.und, i.valor_unitario"
+        " FROM recebimentos r LEFT JOIN itens i ON i.id = r.item_id WHERE r.pedido_id = ? ORDER BY r.id", (pid,)
     ).fetchall()
-
-    # Agrupa recebimentos por NF
-    recebimentos = []
-    for r in recs:
-        existente = next((x for x in recebimentos if x["nf"] == r["nf"]), None)
-        item = {
-            "item_id": r["item_id"], "numero_item": r["numero_item"],
-            "descricao": r["descricao"], "und": r["und"], "qtde_recebida": r["qtde_recebida"],
-        }
-        if existente is None:
-            recebimentos.append({
-                "id": r["id"], "nf": r["nf"] or "—", "data_recebimento": r["data_recebimento"],
-                "observacoes": r["observacoes"], "itens": [item],
-            })
-        else:
-            existente["itens"].append(item)
-
-    rs = resumo_pedidos(db, pedido_id=pid).get(pid, {"pedida": 0, "recebida": 0, "status": "INCLUIDO"})
-    qtde_total_pedida = rs["pedida"]
-    qtde_total_recebida = rs["recebida"]
-    status = rs["status"]
-
-    # Saldo físico atual de cada item (para limitar o recebimento na tela)
-    itens_saida = []
-    for i in itens_pedido:
-        d = dict(i)
-        tot = db.execute(
-            "SELECT COALESCE(SUM(qtde_recebida),0) as v FROM recebimentos WHERE item_id = ?",
-            (d["item_id"],),
-        ).fetchone()["v"]
-        emp = db.execute("SELECT qtde_empenhada FROM itens WHERE id = ?", (d["item_id"],)).fetchone()
-        d["saldo_fisico"] = max(0, float(emp["qtde_empenhada"] or 0) - float(tot or 0))
-        d["pendente"] = max(0, min(float(d["qtde_pedida"] or 0) - float(d["qtde_recebida"] or 0), d["saldo_fisico"]))
-        itens_saida.append(d)
 
     return jsonify({
         "ok": True,
         "pedido": dict(pedido),
         "empenho": dict(empenho) if empenho else None,
-        "itens": itens_saida,
-        "recebimentos": recebimentos,
-        "qtde_total_pedida": qtde_total_pedida,
-        "qtde_total_recebida": qtde_total_recebida,
-        "status": status,
+        "itens": itens,
+        "recebimentos": _grupos_nf(recs),
+        "qtde_total_pedida": rs["pedida"],
+        "qtde_total_recebida": rs["recebida"],
+        "status": rs["status"],
+        "vencimento": rs["vencimento"],
+        "dias_atraso": rs["dias_atraso"],
+        "valor_total": sum(i["valor_pedido"] for i in itens),
     })
 
 
@@ -673,29 +1142,25 @@ def api_pedido_pdf(pid):
     from fpdf import FPDF
 
     def norm(txt):
-        """Limpa apenas caracteres de controle; mantém acentos (fonte TTF)."""
         if txt is None:
             return ""
         return "".join(c if ord(c) >= 32 else " " for c in str(txt))
 
     def fmt_br(v):
-        return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
     db = get_db()
     pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
     if not pedido:
-        return jsonify({"ok": False, "error": "Pedido não encontrado"}), 404
-
+        return erro("Pedido não encontrado", 404)
     empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (pedido["empenho_id"],)).fetchone()
-
     itens = db.execute(
-        "SELECT pi.qtde_pedida, i.numero_item, i.descricao, i.und, i.valor_unitario, i.valor_total"
-        " FROM pedido_itens pi JOIN itens i ON i.id = pi.item_id"
-        " WHERE pi.pedido_id = ? ORDER BY i.id",
-        (pid,),
+        "SELECT pi.qtde_pedida, i.numero_item, i.descricao, i.und, i.valor_unitario"
+        " FROM pedido_itens pi JOIN itens i ON i.id = pi.item_id WHERE pi.pedido_id = ? ORDER BY i.id", (pid,)
     ).fetchall()
-
-    valor_total = sum(float(i["valor_total"]) for i in itens)
+    # Valor do PEDIDO = qtde pedida × valor unitário (antes saía o total do item no empenho)
+    linhas = [(i, float(i["qtde_pedida"] or 0) * float(i["valor_unitario"] or 0)) for i in itens]
+    valor_total = sum(v for _, v in linhas)
 
     FONT = os.path.join(BASE_DIR, "static", "fonts", "DejaVuSans.ttf")
     FONT_BLACK = os.path.join(BASE_DIR, "static", "fonts", "DejaVuSans-Bold.ttf")
@@ -704,7 +1169,7 @@ def api_pedido_pdf(pid):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.add_font("ArialU", "", FONT)
-            self.add_font("ArialU", "B", FONT)
+            self.add_font("ArialU", "B", FONT_BLACK)
             self.add_font("ArialBlk", "", FONT_BLACK)
 
         def footer(self):
@@ -719,14 +1184,13 @@ def api_pedido_pdf(pid):
 
     pdf = PedidoPDF("P", "mm", "A4")
     pdf.alias_nb_pages()
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.set_auto_page_break(auto=False)
     pdf.set_left_margin(15)
     pdf.set_right_margin(15)
     pdf.add_page()
+    CONTENT_W = 210 - 30
+    LIMITE_Y = 297 - 22
 
-    CONTENT_W = 210 - 30  # 15mm de cada lado
-
-    # ---------- Cabeçalho institucional ----------
     NAVY = (26, 51, 115)
     GOLD = (201, 174, 96)
     LIGHT = (180, 196, 224)
@@ -745,7 +1209,6 @@ def api_pedido_pdf(pid):
     pdf.set_fill_color(*GOLD)
     pdf.rect(0, 30, 210, 2.5, "F")
 
-    # ---------- Título do documento ----------
     pdf.ln(8)
     pdf.set_font("ArialBlk", "", 15)
     pdf.set_text_color(*NAVY)
@@ -754,21 +1217,25 @@ def api_pedido_pdf(pid):
     pdf.set_text_color(70, 70, 80)
     pdf.cell(0, 6, "PEDIDO DE ENTREGA", align="C", new_x="LMARGIN", new_y="NEXT")
 
-    # ---------- Bloco central (dados do pedido) ----------
     pdf.ln(3)
     pdf.set_text_color(*NAVY)
     pdf.set_font("ArialBlk", "", 26)
     pdf.cell(0, 11, f"PEDIDO {norm(pedido['numero_pedido'])}", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("ArialBlk", "", 16)
     pdf.cell(0, 9, norm(empenho['ne'] if empenho else "-"), align="C", new_x="LMARGIN", new_y="NEXT")
+    if empenho and empenho["nome_credor"]:
+        pdf.set_font("ArialU", "B", 11)
+        pdf.cell(0, 6, norm(empenho["nome_credor"]), align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("ArialU", "B", 12)
     pdf.set_text_color(60, 60, 70)
-    pdf.cell(0, 7, f"DATA: {norm(pedido['data_pedido'] or '-')}", align="C", new_x="LMARGIN", new_y="NEXT")
+    linha_data = f"DATA: {data_br(pedido['data_pedido']) or '-'}"
+    if pedido["prazo_dias"] and parse_data(pedido["data_pedido"]):
+        venc = parse_data(pedido["data_pedido"]) + timedelta(days=int(pedido["prazo_dias"]))
+        linha_data += f"     •     ENTREGA ATÉ: {venc.strftime('%d/%m/%Y')} ({pedido['prazo_dias']} dias)"
+    pdf.cell(0, 7, norm(linha_data), align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(30, 30, 30)
-
     pdf.ln(6)
 
-    # ---------- Tabela de itens ----------
     pdf.set_font("ArialBlk", "", 13)
     pdf.set_text_color(*NAVY)
     pdf.cell(0, 8, "ITENS SOLICITADOS", new_x="LMARGIN", new_y="NEXT")
@@ -777,228 +1244,528 @@ def api_pedido_pdf(pid):
     pdf.set_line_width(1)
     pdf.line(15, pdf.get_y(), 195, pdf.get_y())
     pdf.set_line_width(0.2)
+    pdf.set_draw_color(0, 0, 0)
     pdf.ln(4)
 
     col_w = [14, 72, 14, 26, 27, 27]  # total 180mm
     headers = ["ITEM", "DESCRIÇÃO", "UND.", "QTDE", "VLR UNITÁRIO", "VLR TOTAL"]
 
-    def cabeçalho_tabela(altura=8):
+    def cabecalho_tabela():
         pdf.set_fill_color(*NAVY)
         pdf.set_text_color(255, 255, 255)
         pdf.set_font("ArialU", "B", 8)
         for h, w in zip(headers, col_w):
-            pdf.cell(w, altura, norm(h), border=1, fill=True, align="C")
+            pdf.cell(w, 8, norm(h), border=1, fill=True, align="C")
         pdf.ln()
+        pdf.set_font("ArialU", "", 9)
+        pdf.set_text_color(30, 30, 30)
 
-    cabeçalho_tabela()
-
-    pdf.set_font("ArialU", "", 9)
-    pdf.set_text_color(30, 30, 30)
+    cabecalho_tabela()
+    LH = 5  # altura de cada linha de texto
     fill = False
-    for i in itens:
-        if pdf.get_y() > 255:
-            pdf.add_page()
-            cabeçalho_tabela(8)
-            pdf.set_font("ArialU", "", 9)
-            pdf.set_text_color(30, 30, 30)
-        pdf.set_fill_color(246, 248, 252) if fill else pdf.set_fill_color(255, 255, 255)
+    for i, valor in linhas:
         desc = norm(i["descricao"] or "")
-        pdf.cell(col_w[0], 7, norm(i["numero_item"] or ""), border=1, fill=True, align="C")
-        pdf.cell(col_w[1], 7, desc, border=1, fill=True, align="C")
-        pdf.cell(col_w[2], 7, norm(i["und"] or ""), border=1, fill=True, align="C")
-        pdf.cell(col_w[3], 7, f'{i["qtde_pedida"]:g}', border=1, fill=True, align="R")
-        pdf.cell(col_w[4], 7, "R$" + fmt_br(i["valor_unitario"]), border=1, fill=True, align="R")
-        pdf.cell(col_w[5], 7, "R$" + fmt_br(i["valor_total"]), border=1, fill=True, align="R")
-        pdf.ln()
+        # Descrição longa quebra em várias linhas (antes era cortada)
+        n = max(1, len(pdf.multi_cell(col_w[1], LH, desc, dry_run=True, output="LINES")))
+        h = max(7, n * LH + 2)
+        if pdf.get_y() + h > LIMITE_Y:
+            pdf.add_page()
+            cabecalho_tabela()
+        pdf.set_fill_color(246, 248, 252) if fill else pdf.set_fill_color(255, 255, 255)
+        x, y = pdf.get_x(), pdf.get_y()
+        pdf.cell(col_w[0], h, norm(i["numero_item"] or ""), border=1, fill=True, align="C")
+        pdf.rect(x + col_w[0], y, col_w[1], h, "DF")
+        pdf.set_xy(x + col_w[0], y + (h - n * LH) / 2)
+        pdf.multi_cell(col_w[1], LH, desc, border=0, align="C")
+        pdf.set_xy(x + col_w[0] + col_w[1], y)
+        pdf.cell(col_w[2], h, norm(i["und"] or ""), border=1, fill=True, align="C")
+        pdf.cell(col_w[3], h, fmt_qtd(i["qtde_pedida"]), border=1, fill=True, align="R")
+        pdf.cell(col_w[4], h, "R$ " + fmt_br(i["valor_unitario"] or 0), border=1, fill=True, align="R")
+        pdf.cell(col_w[5], h, "R$ " + fmt_br(valor), border=1, fill=True, align="R")
+        pdf.set_xy(x, y + h)
         fill = not fill
 
-    # ---------- Valor total ----------
-    if pdf.get_y() > 258:
+    if pdf.get_y() + 16 > LIMITE_Y:
         pdf.add_page()
     pdf.ln(4)
     pdf.set_fill_color(*NAVY)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("ArialBlk", "", 12)
-    pdf.cell(CONTENT_W, 10, f"  VALOR TOTAL:  R$ {fmt_br(valor_total)}", border=0, fill=True, new_x="LMARGIN", new_y="NEXT")
-    pdf.set_text_color(30, 30, 30)
+    pdf.cell(CONTENT_W, 10, f"  VALOR TOTAL DO PEDIDO:  R$ {fmt_br(valor_total)}", border=0, fill=True, new_x="LMARGIN", new_y="NEXT")
+    if pedido["observacoes"]:
+        pdf.ln(4)
+        pdf.set_text_color(60, 60, 70)
+        pdf.set_font("ArialU", "", 9)
+        pdf.multi_cell(CONTENT_W, 5, norm("Observações: " + pedido["observacoes"]))
 
-    import io as _io
-    buf = _io.BytesIO()
+    buf = io.BytesIO()
     pdf.output(buf)
     buf.seek(0)
-
-    nome_arquivo = f"PEDIDO_{pedido['numero_pedido']}.pdf"
-    return (
-        buf.getvalue(),
-        200,
-        {
-            "Content-Type": "application/pdf",
-            "Content-Disposition": f"attachment; filename={nome_arquivo}",
-        },
-    )
+    nome = re.sub(r"[^A-Za-z0-9._-]+", "_", f"PEDIDO_{pedido['numero_pedido']}") + ".pdf"
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=nome)
 
 
 @app.route("/api/pedidos/<int:pid>", methods=["DELETE"])
 def api_excluir_pedido(pid):
     db = get_db()
+    pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
+    if not pedido:
+        return erro("Pedido não encontrado", 404)
+    eid = pedido["empenho_id"]
+    valor_nfs = db.execute(
+        "SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v FROM recebimentos r"
+        " JOIN itens i ON i.id = r.item_id WHERE r.pedido_id = ?", (pid,)
+    ).fetchone()["v"]
+    liq, pago = liquidado_e_pago(db, eid)
+    if liq - float(valor_nfs or 0) + 0.005 < pago:
+        return erro("As NFs deste pedido já têm pagamento (OB). Exclua o pagamento antes.")
+    mandar_para_lixeira(db, "pedido", f"Pedido {pedido['numero_pedido']} com itens e NFs", eid, snapshot(db, pedido_id=pid))
     db.execute("DELETE FROM pedidos WHERE id = ?", (pid,))
+    registrar(db, "EXCLUIR", "pedido", pid, eid, f"Pedido {pedido['numero_pedido']} enviado para a lixeira")
     db.commit()
     return jsonify({"ok": True})
 
 
+# ============================================================================
+# RECEBIMENTOS (NFs) — liquidação
+# ============================================================================
+def _validar_recebimento(db, pid, itens, ignorar_ids=()):
+    """Só itens do pedido e até o que falta chegar. Na edição de uma NF, as linhas
+    dela (ignorar_ids) não contam como já recebidas."""
+    resumo = resumo_pedidos(db, pedido_id=pid).get(pid, {"itens": {}})
+    ignorar = {}
+    if ignorar_ids:
+        for r in db.execute(f"SELECT item_id, qtde_recebida FROM recebimentos WHERE id IN ({_in(ignorar_ids)})",
+                            tuple(ignorar_ids)).fetchall():
+            ignorar[r["item_id"]] = ignorar.get(r["item_id"], 0.0) + float(r["qtde_recebida"] or 0)
+    validos = []
+    for it in itens:
+        qtde = parse_money(it.get("qtde_recebida"))
+        if qtde <= 0 or not it.get("item_id"):
+            continue
+        item_id = int(it.get("item_id"))
+        no_pedido = resumo["itens"].get(item_id)
+        item = item_completo(db, item_id)
+        nome = nome_item(item) if item else "Item"
+        if not item or not no_pedido:
+            return None, f"{nome} não faz parte deste pedido"
+        devolve = ignorar.get(item_id, 0.0)
+        saldo = item["saldo_fisico"] + devolve
+        pendente = max(0.0, min(no_pedido["pedida"] - no_pedido["recebida"] + devolve, saldo))
+        if qtde > pendente + EPS:
+            return None, f"{nome}: recebendo {fmt_qtd(qtde)}, mas só faltam {fmt_qtd(pendente)} neste pedido"
+        validos.append((item_id, qtde, float(item["valor_unitario"] or 0)))
+    if not validos:
+        return None, "Informe ao menos uma quantidade recebida"
+    return validos, None
+
+
 @app.route("/api/pedidos/<int:pid>/receber", methods=["POST"])
 def api_receber_pedido(pid):
-    """Registra o RECEBIMENTO do pedido (baixa de saldo físico + financeiro).
-
-    Body: { nf, data_recebimento, itens: [{item_id, qtde_recebida}] }
-    Cada item registrado vira um lançamento na tabela recebimentos.
-    """
+    """Body: { nf, data_recebimento, observacoes, itens: [{item_id, qtde_recebida}] }"""
     data = request.json or {}
     nf = (data.get("nf") or "").strip()
-    data_rec = (data.get("data_recebimento") or "").strip() or datetime.now().strftime("%Y-%m-%d")
-    itens = data.get("itens") or []
-
+    data_rec = (data.get("data_recebimento") or "").strip()[:10] or date.today().isoformat()
     db = get_db()
     pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
     if not pedido:
-        return jsonify({"ok": False, "error": "Pedido não encontrado"}), 404
+        return erro("Pedido não encontrado", 404)
+    if pedido["encerrado"]:
+        return erro("Pedido encerrado. Reabra o pedido para registrar novas entregas.")
     if not nf:
-        return jsonify({"ok": False, "error": "Informe o número da NF"}), 400
-    if not itens or not any(float(i.get("qtde_recebida") or 0) > 0 for i in itens):
-        return jsonify({"ok": False, "error": "Informe ao menos uma quantidade recebida"}), 400
-
-    # Valida TUDO antes de gravar: só itens do pedido e sem passar do pendente
-    resumo = resumo_pedidos(db, pedido_id=pid).get(pid, {"itens": {}})
-    validos = []
-    for it in itens:
-        item_id = it.get("item_id")
-        qtde = float(it.get("qtde_recebida") or 0)
-        if qtde <= 0 or not item_id:
-            continue
-        item_id = int(item_id)
-        no_pedido = resumo["itens"].get(item_id)
-        item = db.execute(
-            "SELECT i.*, (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id) as recebida"
-            " FROM itens i WHERE i.id = ?",
-            (item_id,),
-        ).fetchone()
-        nome = nome_item(item) if item else "Item"
-        if not item or not no_pedido:
-            return jsonify({"ok": False, "error": f"{nome} não faz parte deste pedido"}), 400
-        saldo = max(0, float(item["qtde_empenhada"] or 0) - float(item["recebida"] or 0))
-        pendente = max(0, min(no_pedido["pedida"] - no_pedido["recebida"], saldo))
-        if qtde > pendente + EPS:
-            return jsonify({"ok": False, "error": f"{nome}: recebendo {qtde:g}, mas só faltam {pendente:g} neste pedido"}), 400
-        validos.append((item_id, qtde, it.get("observacoes") or ""))
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    total_recebido = 0
-    for item_id, qtde, obs in validos:
+        return erro("Informe o número da NF")
+    validos, msg = _validar_recebimento(db, pid, data.get("itens") or [])
+    if msg:
+        return erro(msg)
+    now = agora()
+    obs = (data.get("observacoes") or "").strip()
+    total_qtd = total_valor = 0.0
+    for item_id, qtde, vu in validos:
         db.execute(
             "INSERT INTO recebimentos (empenho_id, pedido_id, item_id, nf, data_recebimento, qtde_recebida, observacoes, criado_em)"
             " VALUES (?,?,?,?,?,?,?,?)",
             (pedido["empenho_id"], pid, item_id, nf, data_rec, qtde, obs, now),
         )
-        total_recebido += qtde
-
+        total_qtd += qtde
+        total_valor += qtde * vu
+    registrar(db, "RECEBER", "pedido", pid, pedido["empenho_id"],
+              f"NF {nf} registrada no pedido {pedido['numero_pedido']} — liquidado {fmt_brl(total_valor)}")
     db.commit()
-    return jsonify({"ok": True, "nf": nf, "qtde_total_recebida": total_recebido})
+    return jsonify({"ok": True, "nf": nf, "qtde_total_recebida": total_qtd, "valor": total_valor})
 
 
-@app.route("/api/recebimentos/<int:rid>", methods=["DELETE"])
-def api_excluir_recebimento(rid):
+def _ids_da_nf(db, pid, ids):
+    ids = [int(x) for x in (ids or []) if str(x).isdigit()]
+    if not ids:
+        return []
+    ok = db.execute(f"SELECT id FROM recebimentos WHERE pedido_id = ? AND id IN ({_in(ids)})", (pid, *ids)).fetchall()
+    return [r["id"] for r in ok] if len(ok) == len(ids) else []
+
+
+@app.route("/api/pedidos/<int:pid>/nfs", methods=["PUT"])
+def api_editar_nf(pid):
+    """Corrige uma NF já lançada: número, data, observação e quantidades.
+    Body: { ids: [...linhas da NF], nf, data_recebimento, observacoes, itens: [...] }"""
+    data = request.json or {}
     db = get_db()
-    db.execute("DELETE FROM recebimentos WHERE id = ?", (rid,))
+    pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
+    if not pedido:
+        return erro("Pedido não encontrado", 404)
+    ids = _ids_da_nf(db, pid, data.get("ids"))
+    if not ids:
+        return erro("NF não encontrada neste pedido", 404)
+    nf = (data.get("nf") or "").strip()
+    if not nf:
+        return erro("Informe o número da NF")
+    validos, msg = _validar_recebimento(db, pid, data.get("itens") or [], ignorar_ids=ids)
+    if msg:
+        return erro(msg)
+    antes = db.execute(
+        f"SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v FROM recebimentos r JOIN itens i ON i.id = r.item_id"
+        f" WHERE r.id IN ({_in(ids)})", tuple(ids)).fetchone()["v"]
+    depois = sum(q * vu for _, q, vu in validos)
+    liq, pago = liquidado_e_pago(db, pedido["empenho_id"])
+    if liq - float(antes or 0) + depois + 0.005 < pago:
+        return erro(f"Com essa correção o liquidado ficaria abaixo do já pago ({fmt_brl(pago)}). Ajuste o pagamento antes.")
+    antiga = db.execute(f"SELECT nf, criado_em FROM recebimentos WHERE id IN ({_in(ids)})", tuple(ids)).fetchone()
+    db.execute(f"DELETE FROM recebimentos WHERE id IN ({_in(ids)})", tuple(ids))
+    data_rec = (data.get("data_recebimento") or "").strip()[:10] or date.today().isoformat()
+    for item_id, qtde, _ in validos:
+        db.execute(
+            "INSERT INTO recebimentos (empenho_id, pedido_id, item_id, nf, data_recebimento, qtde_recebida, observacoes, criado_em)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (pedido["empenho_id"], pid, item_id, nf, data_rec, qtde, (data.get("observacoes") or "").strip(),
+             antiga["criado_em"] or agora()),
+        )
+    registrar(db, "EDITAR", "nf", pid, pedido["empenho_id"],
+              f"NF {antiga['nf']} do pedido {pedido['numero_pedido']} corrigida"
+              + (f" (agora NF {nf})" if nf != antiga["nf"] else "")
+              + f": liquidado {fmt_brl(antes)} → {fmt_brl(depois)}")
     db.commit()
     return jsonify({"ok": True})
 
 
+@app.route("/api/pedidos/<int:pid>/nfs/excluir", methods=["POST"])
+def api_excluir_nf(pid):
+    data = request.json or {}
+    db = get_db()
+    pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
+    if not pedido:
+        return erro("Pedido não encontrado", 404)
+    ids = _ids_da_nf(db, pid, data.get("ids"))
+    if not ids:
+        return erro("NF não encontrada neste pedido", 404)
+    valor = db.execute(
+        f"SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v FROM recebimentos r JOIN itens i ON i.id = r.item_id"
+        f" WHERE r.id IN ({_in(ids)})", tuple(ids)).fetchone()["v"]
+    liq, pago = liquidado_e_pago(db, pedido["empenho_id"])
+    if liq - float(valor or 0) + 0.005 < pago:
+        return erro(f"Esta NF já tem pagamento (OB). Excluí-la deixaria o liquidado abaixo do pago ({fmt_brl(pago)}).")
+    nf = db.execute(f"SELECT nf FROM recebimentos WHERE id IN ({_in(ids)})", tuple(ids)).fetchone()["nf"]
+    mandar_para_lixeira(db, "nf", f"NF {nf} do pedido {pedido['numero_pedido']} ({fmt_brl(valor)})",
+                        pedido["empenho_id"], snapshot(db, recebimento_ids=ids))
+    db.execute(f"DELETE FROM recebimentos WHERE id IN ({_in(ids)})", tuple(ids))
+    registrar(db, "EXCLUIR", "nf", pid, pedido["empenho_id"],
+              f"NF {nf} do pedido {pedido['numero_pedido']} enviada para a lixeira ({fmt_brl(valor)})")
+    db.commit()
+    return jsonify({"ok": True})
+
+
+# ============================================================================
+# PAGAMENTOS (OB)
+# ============================================================================
+@app.route("/api/empenhos/<int:eid>/pagamentos", methods=["POST"])
+def api_registrar_pagamento(eid):
+    data = request.json or {}
+    db = get_db()
+    empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (eid,)).fetchone()
+    if not empenho:
+        return erro("Empenho não encontrado", 404)
+    ob = (data.get("ob") or "").strip()
+    valor = round(parse_money(data.get("valor")), 2)
+    if not ob:
+        return erro("Informe o número da OB")
+    if valor <= 0:
+        return erro("Informe o valor pago")
+    liq, pago = liquidado_e_pago(db, eid)
+    if pago + valor > liq + 0.005:
+        return erro(f"Valor acima do que falta pagar: liquidado {fmt_brl(liq)}, já pago {fmt_brl(pago)}, "
+                    f"a pagar {fmt_brl(max(0, liq - pago))}")
+    cur = db.execute(
+        "INSERT INTO pagamentos (empenho_id, ob, data_pagamento, valor, nf, observacoes, criado_em) VALUES (?,?,?,?,?,?,?)",
+        (eid, ob, (data.get("data_pagamento") or date.today().isoformat())[:10], valor,
+         (data.get("nf") or "").strip(), (data.get("observacoes") or "").strip(), agora()),
+    )
+    registrar(db, "PAGAR", "pagamento", cur.lastrowid, eid, f"OB {ob} registrada: {fmt_brl(valor)}")
+    db.commit()
+    return jsonify({"ok": True, "id": cur.lastrowid})
+
+
+@app.route("/api/pagamentos/<int:pgid>", methods=["DELETE"])
+def api_excluir_pagamento(pgid):
+    db = get_db()
+    p = db.execute("SELECT * FROM pagamentos WHERE id = ?", (pgid,)).fetchone()
+    if not p:
+        return erro("Pagamento não encontrado", 404)
+    mandar_para_lixeira(db, "pagamento", f"OB {p['ob']} ({fmt_brl(p['valor'])})", p["empenho_id"],
+                        snapshot(db, pagamento_id=pgid))
+    db.execute("DELETE FROM pagamentos WHERE id = ?", (pgid,))
+    registrar(db, "EXCLUIR", "pagamento", pgid, p["empenho_id"], f"OB {p['ob']} enviada para a lixeira")
+    db.commit()
+    return jsonify({"ok": True})
+
+
+# ============================================================================
+# HISTÓRICO E LIXEIRA
+# ============================================================================
+@app.route("/api/historico")
+def api_historico():
+    db = get_db()
+    eid = request.args.get("empenho_id", type=int)
+    limite = min(request.args.get("limite", default=200, type=int), 1000)
+    if eid:
+        rows = _linhas(db, "SELECT * FROM auditoria WHERE empenho_id = ? ORDER BY id DESC LIMIT ?", (eid, limite))
+    else:
+        rows = _linhas(db, "SELECT a.*, e.ne FROM auditoria a LEFT JOIN empenhos e ON e.id = a.empenho_id"
+                           " ORDER BY a.id DESC LIMIT ?", (limite,))
+    return jsonify(rows)
+
+
+@app.route("/api/lixeira")
+def api_lixeira():
+    db = get_db()
+    return jsonify(_linhas(db, "SELECT id, quando, usuario, tipo, descricao, empenho_id FROM lixeira"
+                               " WHERE restaurado = 0 ORDER BY id DESC LIMIT 300", ()))
+
+
+@app.route("/api/lixeira/<int:lid>/restaurar", methods=["POST"])
+def api_restaurar(lid):
+    db = get_db()
+    reg = db.execute("SELECT * FROM lixeira WHERE id = ? AND restaurado = 0", (lid,)).fetchone()
+    if not reg:
+        return erro("Registro não encontrado na lixeira", 404)
+    dados = json.loads(reg["dados"])
+    restauradas, puladas, mapa = restaurar_snapshot(db, dados)
+    if not restauradas:
+        db.rollback()
+        return erro("Nada pôde ser restaurado: o empenho/pedido ao qual isso pertencia não existe mais. "
+                    "Restaure-o primeiro.")
+    db.execute("UPDATE lixeira SET restaurado = 1 WHERE id = ?", (lid,))
+    novo_eid = mapa["empenhos"].get(reg["empenho_id"], reg["empenho_id"])
+    if novo_eid != reg["empenho_id"]:
+        # o histórico do empenho acompanha o registro restaurado
+        db.execute("UPDATE auditoria SET empenho_id = ? WHERE empenho_id = ?", (novo_eid, reg["empenho_id"]))
+        db.execute("UPDATE lixeira SET empenho_id = ? WHERE empenho_id = ? AND restaurado = 0", (novo_eid, reg["empenho_id"]))
+    registrar(db, "RESTAURAR", reg["tipo"], None, novo_eid, f"Restaurado da lixeira: {reg['descricao']}"
+              + (f" ({puladas} registro(s) não puderam voltar)" if puladas else ""))
+    db.commit()
+    return jsonify({"ok": True, "restauradas": restauradas, "puladas": puladas, "empenho_id": novo_eid})
+
+
+# ============================================================================
+# INDICADORES, EVOLUÇÃO E EXPORTAÇÃO
+# ============================================================================
 @app.route("/api/stats_empenhos")
 def api_stats_empenhos():
     db = get_db()
-    tot = db.execute("SELECT COUNT(*) as qtd FROM empenhos").fetchone()["qtd"]
+    lista = financeiro_empenhos(db)
+    tot = len(lista)
+    empenhado = sum(e["valor_empenhado"] for e in lista)
+    liquidado = sum(e["valor_liquidado"] for e in lista)
+    pago = sum(e["valor_pago"] for e in lista)
     itens = db.execute("SELECT COUNT(*) as qtd FROM itens").fetchone()["qtd"]
     pedidos = db.execute("SELECT COUNT(*) as qtd FROM pedidos").fetchone()["qtd"]
 
-    empenhado = db.execute("SELECT COALESCE(SUM(valor_total),0) as v FROM itens").fetchone()["v"]
-    pago = db.execute(
-        "SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v"
-        " FROM recebimentos r JOIN itens i ON i.id = r.item_id"
-    ).fetchone()["v"]
-    a_liquidar = empenhado - pago
-
-    # Físico (quantidade)
-    qtde_empenhada_total = db.execute("SELECT COALESCE(SUM(qtde_empenhada),0) as v FROM itens").fetchone()["v"]
-    qtde_recebida_total = db.execute("SELECT COALESCE(SUM(qtde_recebida),0) as v FROM recebimentos").fetchone()["v"]
-
-    # Itens com saldo físico zerado (todas as unidades recebidas)
-    itens_zerados = db.execute(
-        "SELECT COUNT(*) as qtd FROM itens i WHERE i.qtde_empenhada > 0"
-        " AND (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id)"
-        "     >= i.qtde_empenhada"
-    ).fetchone()["qtd"]
-
-    # Execução física: média do % recebido de cada item (limitado a 100%).
-    # Antes somava unidades diferentes (CX + KG + UN), o que não tinha significado.
     fis = db.execute(
         "SELECT i.qtde_empenhada as emp,"
         " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id) as rec"
         " FROM itens i WHERE i.qtde_empenhada > 0"
     ).fetchall()
     itens_com_qtde = len(fis)
+    itens_zerados = sum(1 for f in fis if float(f["rec"]) + EPS >= float(f["emp"]))
     percentual_fisico = (
         round(sum(min(1.0, float(f["rec"]) / float(f["emp"])) for f in fis) / itens_com_qtde * 100, 2)
         if itens_com_qtde else 0
     )
+    concluidos = sum(1 for e in lista if e["situacao"] == "CONCLUIDO")
 
-    # Empenhos concluídos: têm ao menos 1 item e todos foram recebidos por completo
-    # (antes, um empenho sem itens contava como concluído)
-    empenhos_concluidos = db.execute(
-        "SELECT COUNT(*) as qtd FROM empenhos e WHERE"
-        " EXISTS (SELECT 1 FROM itens i0 WHERE i0.empenho_id = e.id AND i0.qtde_empenhada > 0)"
-        " AND NOT EXISTS (SELECT 1 FROM itens i WHERE i.empenho_id = e.id"
-        "   AND i.qtde_empenhada > 0"
-        "   AND (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id)"
-        "       < i.qtde_empenhada)"
-    ).fetchone()["qtd"]
-
-    # Mesma regra de status usada nas telas de empenho e de pedido
-    status_pedidos = {"INCLUIDO": 0, "PARCIAL": 0, "RECEBIDO": 0}
-    for p in resumo_pedidos(db).values():
+    status_pedidos = {"INCLUIDO": 0, "PARCIAL": 0, "RECEBIDO": 0, "ENCERRADO": 0}
+    resumo = resumo_pedidos(db)
+    for p in resumo.values():
         if p["pedida"] > 0:
             status_pedidos[p["status"]] += 1
     aberto = status_pedidos["INCLUIDO"] + status_pedidos["PARCIAL"]
 
+    atrasados = []
+    ids_atraso = [pid for pid, p in resumo.items() if p["atrasado"]]
+    if ids_atraso:
+        meta = {r["id"]: r for r in db.execute(
+            f"SELECT p.id, p.numero_pedido, p.empenho_id, e.ne, e.nome_credor FROM pedidos p"
+            f" JOIN empenhos e ON e.id = p.empenho_id WHERE p.id IN ({_in(ids_atraso)})", tuple(ids_atraso)).fetchall()}
+        for pid in ids_atraso:
+            m = meta.get(pid)
+            if m:
+                atrasados.append({"pedido_id": pid, "numero_pedido": m["numero_pedido"], "empenho_id": m["empenho_id"],
+                                  "ne": m["ne"], "nome_credor": m["nome_credor"],
+                                  "vencimento": resumo[pid]["vencimento"], "dias_atraso": resumo[pid]["dias_atraso"],
+                                  "status": resumo[pid]["status"]})
+        atrasados.sort(key=lambda x: -x["dias_atraso"])
+
+    def pc(a, b):
+        return round(a / b * 100, 2) if b else 0
+
     return jsonify({
         "empenhos": tot, "itens": itens, "pedidos": pedidos,
         "pedidos_em_aberto": aberto,
+        "pedidos_atrasados": len(atrasados),
+        "lista_atrasados": atrasados[:10],
         "valor_empenhado": empenhado,
+        "valor_liquidado": liquidado,
         "valor_pago": pago,
-        "valor_a_liquidar": max(0, a_liquidar),
-        "percentual_pago": round((pago / empenhado * 100), 2) if empenhado else 0,
-        "qtde_empenhada_total": qtde_empenhada_total,
-        "qtde_recebida_total": qtde_recebida_total,
+        "valor_a_liquidar": max(0.0, empenhado - liquidado),
+        "valor_a_pagar": max(0.0, liquidado - pago),
+        "percentual_liquidado": pc(liquidado, empenhado),
+        "percentual_pago": pc(pago, empenhado),
         "percentual_fisico": percentual_fisico,
         "itens_com_qtde": itens_com_qtde,
         "itens_zerados": itens_zerados,
-        "percentual_itens_zerados": round((itens_zerados / itens * 100), 2) if itens else 0,
-        "empenhos_concluidos": empenhos_concluidos,
-        "empenhos_andamento": max(0, tot - empenhos_concluidos),
-        "percentual_concluidos": round((empenhos_concluidos / tot * 100), 2) if tot else 0,
+        "percentual_itens_zerados": pc(itens_zerados, itens),
+        "empenhos_concluidos": concluidos,
+        "empenhos_andamento": sum(1 for e in lista if e["situacao"] == "ANDAMENTO"),
+        "percentual_concluidos": pc(concluidos, tot),
         "status_pedidos": status_pedidos,
     })
 
 
-# Cria o schema no Postgres automaticamente ao subir no Vercel
-# (o __main__ não roda lá; o app é importado pelo runtime).
-if USE_POSTGRES:
-    try:
-        init_db()
-    except Exception as e:
-        import sys
-        print("init_db PostgreSQL falhou:", e, file=sys.stderr)
+@app.route("/api/evolucao")
+def api_evolucao():
+    """Liquidado (NFs) e pago (OBs) por mês, nos últimos 12 meses."""
+    db = get_db()
+    hoje = date.today()
+    meses = []
+    a, m = hoje.year, hoje.month
+    for _ in range(12):
+        meses.append(f"{a:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            a, m = a - 1, 12
+    meses.reverse()
+    liq = {k: 0.0 for k in meses}
+    pag = {k: 0.0 for k in meses}
+    for r in db.execute(
+        "SELECT r.data_recebimento as d, r.qtde_recebida * i.valor_unitario as v"
+        " FROM recebimentos r JOIN itens i ON i.id = r.item_id WHERE r.data_recebimento >= ?", (meses[0] + "-01",)
+    ).fetchall():
+        k = (r["d"] or "")[:7]
+        if k in liq:
+            liq[k] += float(r["v"] or 0)
+    for r in db.execute("SELECT data_pagamento as d, valor as v FROM pagamentos WHERE data_pagamento >= ?",
+                        (meses[0] + "-01",)).fetchall():
+        k = (r["d"] or "")[:7]
+        if k in pag:
+            pag[k] += float(r["v"] or 0)
+    return jsonify([{"mes": k, "liquidado": liq[k], "pago": pag[k]} for k in meses])
+
+
+@app.route("/api/exportar.xlsx")
+def api_exportar():
+    """Planilha Excel com a posição completa (empenhos, itens, pedidos, NFs, pagamentos)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    db = get_db()
+    MOEDA = '"R$" #,##0.00'
+    QTD = "#,##0.###"
+    PCT = '0.0"%"'
+    wb = Workbook()
+
+    def aba(titulo, cabecalho, linhas, formatos):
+        ws = wb.active if wb.active.title == "Sheet" else wb.create_sheet()
+        ws.title = titulo
+        ws.append(cabecalho)
+        for c in ws[1]:
+            c.font = Font(bold=True, color="FFFFFF")
+            c.fill = PatternFill("solid", fgColor="1A3373")
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for ln in linhas:
+            ws.append(ln)
+        for col, fmt in formatos.items():
+            for cell in ws[get_column_letter(col)][1:]:
+                cell.number_format = fmt
+        for i, h in enumerate(cabecalho, 1):
+            larg = max([len(str(h))] + [len(str(ln[i - 1])) for ln in linhas[:300] if ln[i - 1] is not None])
+            ws.column_dimensions[get_column_letter(i)].width = min(48, max(10, larg + 2))
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        return ws
+
+    lista = financeiro_empenhos(db)
+    sit = {"SEM_ITENS": "Sem itens", "ANDAMENTO": "Em andamento", "CONCLUIDO": "Concluído"}
+    aba("Empenhos",
+        ["NE", "Credor", "Processo", "Situação", "Empenhado", "Liquidado", "Pago", "A liquidar", "A pagar", "% Liquidado", "% Pago"],
+        [[e["ne"], e["nome_credor"], e["processo"], sit[e["situacao"]], e["valor_empenhado"], e["valor_liquidado"],
+          e["valor_pago"], e["a_liquidar"], e["a_pagar"], e["percentual_liquidado"], e["percentual_pago"]] for e in lista],
+        {5: MOEDA, 6: MOEDA, 7: MOEDA, 8: MOEDA, 9: MOEDA, 10: PCT, 11: PCT})
+
+    nes = {e["id"]: e for e in lista}
+    itens = [completar_item(r) for r in db.execute(SQL_ITENS + " ORDER BY i.empenho_id, i.id").fetchall()]
+    aba("Itens",
+        ["NE", "Credor", "Item", "Descrição", "Und", "Qtde empenhada", "Valor unit.", "Valor total", "Recebido",
+         "Saldo físico", "Pedido em aberto", "Saldo a pedir", "Liquidado", "A liquidar"],
+        [[nes.get(i["empenho_id"], {}).get("ne"), nes.get(i["empenho_id"], {}).get("nome_credor"), i["numero_item"],
+          i["descricao"], i["und"], i["qtde_empenhada"], i["valor_unitario"], i["valor_total"], i["qtde_recebida"],
+          i["saldo_fisico"], i["reservado"], i["saldo_a_pedir"], i["liquidado"], i["a_liquidar"]] for i in itens],
+        {6: QTD, 7: MOEDA, 8: MOEDA, 9: QTD, 10: QTD, 11: QTD, 12: QTD, 13: MOEDA, 14: MOEDA})
+
+    resumo = resumo_pedidos(db)
+    st = {"INCLUIDO": "Aguardando", "PARCIAL": "Parcial", "RECEBIDO": "Recebido", "ENCERRADO": "Encerrado"}
+    peds = db.execute("SELECT * FROM pedidos ORDER BY empenho_id, id").fetchall()
+    aba("Pedidos",
+        ["NE", "Credor", "Pedido", "Data", "Prazo (dias)", "Vencimento", "Status", "Dias de atraso", "Qtde pedida", "Qtde recebida"],
+        [[nes.get(p["empenho_id"], {}).get("ne"), nes.get(p["empenho_id"], {}).get("nome_credor"), p["numero_pedido"],
+          data_br(p["data_pedido"]), p["prazo_dias"], data_br(resumo[p["id"]]["vencimento"]),
+          st[resumo[p["id"]]["status"]], resumo[p["id"]]["dias_atraso"] or None,
+          resumo[p["id"]]["pedida"], resumo[p["id"]]["recebida"]] for p in peds],
+        {9: QTD, 10: QTD})
+
+    recs = db.execute(
+        "SELECT r.*, i.numero_item, i.descricao, i.und, i.valor_unitario, p.numero_pedido FROM recebimentos r"
+        " JOIN itens i ON i.id = r.item_id JOIN pedidos p ON p.id = r.pedido_id ORDER BY r.empenho_id, r.data_recebimento, r.id"
+    ).fetchall()
+    aba("NFs (liquidação)",
+        ["NE", "Pedido", "NF", "Data", "Item", "Descrição", "Und", "Qtde", "Valor unit.", "Valor liquidado"],
+        [[nes.get(r["empenho_id"], {}).get("ne"), r["numero_pedido"], r["nf"], data_br(r["data_recebimento"]),
+          r["numero_item"], r["descricao"], r["und"], r["qtde_recebida"], r["valor_unitario"],
+          float(r["qtde_recebida"] or 0) * float(r["valor_unitario"] or 0)] for r in recs],
+        {8: QTD, 9: MOEDA, 10: MOEDA})
+
+    pags = db.execute("SELECT * FROM pagamentos ORDER BY empenho_id, data_pagamento, id").fetchall()
+    aba("Pagamentos (OB)",
+        ["NE", "Credor", "OB", "Data", "Valor", "NF", "Observações"],
+        [[nes.get(p["empenho_id"], {}).get("ne"), nes.get(p["empenho_id"], {}).get("nome_credor"), p["ob"],
+          data_br(p["data_pagamento"]), p["valor"], p["nf"], p["observacoes"]] for p in pags],
+        {5: MOEDA})
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    registrar(db, "EXPORTAR", "planilha", None, None, "Planilha Excel exportada")
+    db.commit()
+    return send_file(buf, as_attachment=True,
+                     download_name=f"aprovisionamento_{date.today().strftime('%Y-%m-%d')}.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# Cria/atualiza o schema automaticamente (no Vercel o __main__ não roda;
+# o app é importado pelo runtime).
+try:
+    init_db()
+except Exception as e:  # banco dormindo no cold start: tenta de novo na próxima
+    print("init_db falhou:", e, file=sys.stderr)
 
 
 if __name__ == "__main__":
-    init_db()
+    if not APP_PASSWORD:
+        print("AVISO: APP_PASSWORD não definida — sistema aberto sem senha (modo local).")
     app.run(debug=True, port=5000, use_reloader=False)

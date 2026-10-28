@@ -7,19 +7,8 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <header class="topbar">
-        <div class="brand">
-            <span class="logo">⚙</span>
-            <div>
-                <h1>Aprovisionamento</h1>
-                <p class="sub">Gestão de Empenhos &amp; Liquidações</p>
-            </div>
-        </div>
-        <div class="topbar-actions">
-            <a href="/empenhos" class="btn btn-ghost" title="Cadastrar empenhos, itens, pedidos e recebimentos">📦 Empenhos</a>
-            <button id="btnRefresh" class="btn btn-ghost" title="Atualizar dados">⟳ Atualizar</button>
-        </div>
-    </header>
+    {% set pagina = 'dashboard' %}{% set icone = '⚙' %}{% set titulo = 'Aprovisionamento' %}{% set subtitulo = 'Gestão de Empenhos & Liquidações' %}
+    {% include '_topbar.html' %}
 
     <main class="container">
         <div id="erroBox" class="alert-error" hidden>
@@ -30,22 +19,32 @@
             <button id="btnTentar" class="btn btn-sm btn-primary">Tentar novamente</button>
         </div>
 
+        <div class="page-head">
+            <h2 class="page-title">Visão geral</h2>
+            <button id="btnRefresh" class="btn btn-secondary btn-sm" title="Atualizar dados">⟳ Atualizar</button>
+        </div>
+
         <section class="kpis" id="kpis"></section>
 
         <section class="indicadores">
-            <h3 class="section-title">Indicadores de Execução</h3>
+            <h3 class="section-title">Execução</h3>
             <div class="ind-grid" id="indGrid"></div>
         </section>
 
-        <section class="charts-grid">
+        <section class="charts-grid charts-3">
             <div class="card">
                 <div class="card-title">Status dos Pedidos</div>
-                <div class="card-sub">Quantos pedidos estão aguardando, parciais ou entregues</div>
+                <div class="card-sub">Aguardando, parciais, entregues e encerrados</div>
                 <div id="chartStatus" class="chart-box"></div>
             </div>
             <div class="card">
-                <div class="card-title">Credores com Maior Saldo a Liquidar</div>
-                <div class="card-sub">Top 5 por valor ainda não pago</div>
+                <div class="card-title">Pedidos Atrasados</div>
+                <div class="card-sub">Entrega vencida e ainda não concluída</div>
+                <div id="chartAtrasados" class="chart-box"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">Maior Saldo a Liquidar</div>
+                <div class="card-sub">Top 5 credores por valor ainda não liquidado</div>
                 <div id="chartCredores" class="chart-box"></div>
             </div>
         </section>
@@ -53,11 +52,26 @@
         <section class="card">
             <div class="chart-head">
                 <div>
-                    <div class="card-title">Empenhado × Pago por Empenho</div>
-                    <div class="card-sub">Os 8 maiores empenhos — a barra cheia é o valor empenhado; a parte colorida, o que já foi pago</div>
+                    <div class="card-title">Evolução Mensal</div>
+                    <div class="card-sub">Valor liquidado (NFs recebidas) e pago (OBs) nos últimos 12 meses</div>
+                </div>
+                <div class="legend">
+                    <span><i style="background:var(--liq)"></i>Liquidado</span>
+                    <span><i style="background:var(--green)"></i>Pago</span>
+                </div>
+            </div>
+            <div id="chartEvolucao"></div>
+        </section>
+
+        <section class="card">
+            <div class="chart-head">
+                <div>
+                    <div class="card-title">Execução por Empenho</div>
+                    <div class="card-sub">Os 8 maiores empenhos — barra cheia = empenhado; clique para abrir</div>
                 </div>
                 <div class="legend">
                     <span><i style="background:var(--track)"></i>Empenhado</span>
+                    <span><i style="background:var(--liq)"></i>Liquidado</span>
                     <span><i style="background:var(--green)"></i>Pago</span>
                 </div>
             </div>
@@ -75,11 +89,11 @@
                         <tr>
                             <th data-key="ne">NE</th>
                             <th data-key="nome_credor">Credor</th>
-                            <th data-key="processo">Processo</th>
                             <th data-key="valor_empenhado" data-default="desc">Empenhado</th>
+                            <th data-key="valor_liquidado" data-default="desc">Liquidado</th>
                             <th data-key="valor_pago" data-default="desc">Pago</th>
                             <th data-key="a_liquidar" data-default="desc">A Liquidar</th>
-                            <th data-key="percentual_pago" data-default="desc">% Pago</th>
+                            <th data-key="percentual_liquidado" data-default="desc">% Liquidado</th>
                             <th></th>
                         </tr>
                     </thead>
