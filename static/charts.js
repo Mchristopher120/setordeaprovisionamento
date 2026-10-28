@@ -1,7 +1,7 @@
 // Gráficos leves em SVG/HTML puro (sem bibliotecas externas: funciona offline).
 
 function graficoVazio(msg) {
-    return `<div class="chart-empty"><span>📊</span>${escapeHTML(msg)}</div>`;
+    return `<div class="chart-empty">${ico('chart-bar', 'ico ico-empty')}${escapeHTML(msg)}</div>`;
 }
 
 /**
@@ -148,7 +148,7 @@ function graficoEvolucao(el, meses) {
 /** Lista de pedidos atrasados (mais atrasados primeiro). */
 function listaAtrasados(el, itens, total) {
     if (!itens.length) {
-        el.innerHTML = `<div class="chart-empty ok"><span>✅</span>Nenhum pedido atrasado.</div>`;
+        el.innerHTML = `<div class="chart-empty ok">${ico('circle-check', 'ico ico-empty')}Nenhum pedido atrasado.</div>`;
         return;
     }
     el.innerHTML = `<ul class="atrasos">${itens.map(a => `

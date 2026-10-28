@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from '_icones.html' import icone as ico %}<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
@@ -12,7 +12,7 @@
     <script src="{{ url_for('static', filename='tema.js') }}"></script>
 </head>
 <body>
-    {% set pagina = 'dashboard' %}{% set icone = '⚙' %}{% set logo_img = 'img/logistica.png' %}{% set logo_alt = 'Logística do Exército Brasileiro' %}{% set titulo = 'Aprovisionamento' %}{% set subtitulo = 'Gestão de Empenhos & Liquidações' %}
+    {% set pagina = 'dashboard' %}{% set logo_img = 'img/logistica.png' %}{% set logo_alt = 'Logística do Exército Brasileiro' %}{% set titulo = 'Aprovisionamento' %}{% set subtitulo = 'Gestão de Empenhos & Liquidações' %}
     {% include '_topbar.html' %}
 
     <main class="container">
@@ -26,15 +26,12 @@
 
         <div class="page-head">
             <h2 class="page-title">Visão geral</h2>
-            <button id="btnRefresh" class="btn btn-secondary btn-sm" title="Atualizar dados">⟳ Atualizar</button>
+            <button id="btnRefresh" class="btn btn-secondary btn-sm" title="Atualizar dados">{{ ico('refresh') }} Atualizar</button>
         </div>
 
-        <section class="kpis" id="kpis"></section>
+        <section class="faixa-atencao" id="atencao" aria-label="Precisa de atenção"></section>
 
-        <section class="indicadores">
-            <h3 class="section-title">Execução</h3>
-            <div class="ind-grid" id="indGrid"></div>
-        </section>
+        <section class="kpis" id="kpis"></section>
 
         <section class="charts-grid charts-3">
             <div class="card">
@@ -110,6 +107,7 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+    <script src="{{ url_for('static', filename='icones.js') }}"></script>
     <script src="{{ url_for('static', filename='ui.js') }}"></script>
     <script src="{{ url_for('static', filename='charts.js') }}"></script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>

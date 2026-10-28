@@ -664,6 +664,22 @@ def resumo_pedidos(db, empenho_id=None, pedido_id=None):
         aberto = p["status"] in ("INCLUIDO", "PARCIAL")
         p["dias_atraso"] = (hoje - venc).days if (venc and aberto and hoje > venc) else 0
         p["atrasado"] = p["dias_atraso"] > 0
+        # Vence nos próximos 7 dias (ainda no prazo) — aparece em "precisa de atenção"
+        p["vencendo"] = bool(venc and aberto and 0 <= (venc - hoje).days <= 7)
+    return out
+
+
+def nfs_a_pagar_por_empenho(db):
+    """{empenho_id: (qtde de NFs a pagar, valor)} — NF = grupo pedido + nº + data."""
+    out = {}
+    for r in db.execute(
+        "SELECT r.empenho_id, r.pedido_id, r.nf, r.data_recebimento,"
+        " SUM(r.qtde_recebida * i.valor_unitario) as v"
+        " FROM recebimentos r JOIN itens i ON i.id = r.item_id WHERE r.pago_em IS NULL"
+        " GROUP BY r.empenho_id, r.pedido_id, r.nf, r.data_recebimento"
+    ).fetchall():
+        qtd, val = out.get(r["empenho_id"], (0, 0.0))
+        out[r["empenho_id"]] = (qtd + 1, val + float(r["v"] or 0))
     return out
 
 
@@ -743,13 +759,18 @@ def api_lista_empenhos():
     db = get_db()
     lista = financeiro_empenhos(db)
     resumo = resumo_pedidos(db)
-    atrasos = {}
+    atrasos, vencendo = {}, {}
     pid_emp = {r["id"]: r["empenho_id"] for r in db.execute("SELECT id, empenho_id FROM pedidos").fetchall()}
     for pid, p in resumo.items():
         if p["atrasado"]:
             atrasos[pid_emp.get(pid)] = atrasos.get(pid_emp.get(pid), 0) + 1
+        if p["vencendo"]:
+            vencendo[pid_emp.get(pid)] = vencendo.get(pid_emp.get(pid), 0) + 1
+    a_pagar = nfs_a_pagar_por_empenho(db)
     for d in lista:
         d["pedidos_atrasados"] = atrasos.get(d["id"], 0)
+        d["pedidos_vencendo"] = vencendo.get(d["id"], 0)
+        d["nfs_a_pagar"] = a_pagar.get(d["id"], (0, 0.0))[0]
     return jsonify(lista)
 
 
@@ -1792,6 +1813,8 @@ def api_stats_empenhos():
         "empenhos": tot, "itens": itens, "pedidos": pedidos,
         "pedidos_em_aberto": aberto,
         "pedidos_atrasados": len(atrasados),
+        "pedidos_vencendo": sum(1 for p in resumo.values() if p["vencendo"]),
+        "nfs_a_pagar": sum(q for q, _ in nfs_a_pagar_por_empenho(db).values()),
         "lista_atrasados": atrasados[:10],
         "valor_empenhado": empenhado,
         "valor_liquidado": liquidado,

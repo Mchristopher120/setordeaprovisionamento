@@ -159,6 +159,7 @@ body {
 .brand { display: flex; align-items: center; gap: 12px; }
 .logo {
     font-size: 26px;
+    color: #fff;
     background: rgba(255,255,255,.15);
     width: 48px; height: 48px;
     display: flex; align-items: center; justify-content: center;
@@ -452,7 +453,9 @@ td.acoes .btn + .btn { margin-left: 6px; }
 
 /* Status badges */
 .badge {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 4px 10px;
     border-radius: 20px;
     font-size: 12px;
@@ -834,3 +837,50 @@ tr.grupo-row.fechado .grupo-seta { transform: rotate(-90deg); }
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+
+/* ---------- Ícones de traço no conteúdo (substituem os emojis) ---------- */
+.ico { width: 1.15em; height: 1.15em; flex: none; vertical-align: -0.22em; }
+.ico-xs { width: 12px; height: 12px; vertical-align: -1px; }
+.ico-lg { width: 22px; height: 22px; }
+.ico-logo { width: 28px; height: 28px; stroke-width: 1.8; }
+.ico-empty { width: 40px; height: 40px; stroke-width: 1.5; opacity: .55; }
+.empty-icon { display: flex; justify-content: center; margin-bottom: 10px; }
+.chart-empty .ico-empty { margin-bottom: 2px; }
+.chart-empty.ok .ico-empty { opacity: 1; }
+.tl-ico .ico { width: 15px; height: 15px; }
+.nf-ico { color: var(--primary-dark); display: inline-flex; }
+.auth-logo { color: var(--primary); }
+.auth-logo .ico-logo { width: 30px; height: 30px; }
+.com-ico, .import-head strong, .historico-box summary, .banner-aviso { display: inline-flex; align-items: center; gap: 6px; }
+.hint-ico .ico { margin-right: 4px; }
+.banner-aviso { display: flex; justify-content: center; }
+td.acoes .btn-sm .ico { width: 18px; height: 18px; }
+
+/* ---------- Cards do topo com barra de progresso ---------- */
+.kpi-bar { height: 6px; background: var(--track); border-radius: 6px; overflow: hidden; margin-top: 10px; }
+.kpi-bar > span { display: block; height: 100%; border-radius: 6px; transition: width .5s ease; }
+
+/* ---------- Faixa "Precisa de atenção" ---------- */
+.faixa-atencao { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; }
+.faixa-atencao:empty { display: none; }
+.atencao-titulo { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 14px; color: var(--text); margin-right: 2px; }
+.atencao-item {
+    display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 10px;
+    font-size: 14px; text-decoration: none; border: 1px solid transparent; transition: filter .15s ease, box-shadow .15s ease;
+}
+.atencao-item:hover { box-shadow: var(--shadow-hover); filter: brightness(.98); }
+.atencao-item:focus-visible { outline: none; box-shadow: var(--focus); }
+.atencao-item .ico { width: 18px; height: 18px; }
+.atencao-item .ico-seta { width: 15px; height: 15px; transform: rotate(180deg); opacity: .6; }
+.atencao-item.critico { background: var(--red-bg); color: var(--err-text); border-color: var(--err-border); }
+.atencao-item.aviso { background: var(--amber-bg); color: var(--warn-text); border-color: var(--alert-soft-border); }
+.atencao-item.info { background: var(--info-bg); color: var(--info-text); border-color: transparent; }
+.atencao-ok {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; font-size: 14px; width: 100%;
+    background: var(--green-bg); color: var(--ok-text); border: 1px solid var(--ok-border);
+}
+
+/* Links dentro das tabelas (ex.: NE no histórico) com a cor do sistema */
+tbody td a:not(.btn) { color: var(--primary-dark); font-weight: 600; text-decoration: none; }
+tbody td a:not(.btn):hover { text-decoration: underline; }

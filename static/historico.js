@@ -3,12 +3,12 @@ const H = { hist: [], lixo: [] };
 const $ = (id) => document.getElementById(id);
 
 const ACAO_ROTULO = {
-    CRIAR: ['🆕 Criou', 'info'], EDITAR: ['✏️ Editou', 'neutro'], EXCLUIR: ['🗑 Excluiu', 'critico'],
-    RESTAURAR: ['♻️ Restaurou', 'ok'], RECEBER: ['📥 Recebeu NF', 'ok'], PAGAR: ['💰 NF paga', 'ok'],
-    ENCERRAR: ['🔒 Encerrou', 'atencao'], REFORCO: ['➕ Reforço', 'ok'], ANULACAO: ['➖ Anulação', 'atencao'],
-    LOGIN: ['🔑 Entrou', 'neutro'], DESFAZER: ['↩ Desfez pagamento', 'atencao'], EXPORTAR: ['⬇ Exportou', 'neutro'],
+    CRIAR: ['plus', 'Criou', 'info'], EDITAR: ['pencil', 'Editou', 'neutro'], EXCLUIR: ['trash', 'Excluiu', 'critico'],
+    RESTAURAR: ['restore', 'Restaurou', 'ok'], RECEBER: ['package-import', 'Recebeu NF', 'ok'], PAGAR: ['cash', 'NF paga', 'ok'],
+    ENCERRAR: ['lock', 'Encerrou', 'atencao'], REFORCO: ['plus', 'Reforço', 'ok'], ANULACAO: ['plus-minus', 'Anulação', 'atencao'],
+    LOGIN: ['key', 'Entrou', 'neutro'], DESFAZER: ['arrow-back-up', 'Desfez pagamento', 'atencao'], EXPORTAR: ['download', 'Exportou', 'neutro'],
 };
-const TIPO_ROTULO = { empenho: '📦 Empenho', item: '📄 Item', pedido: '🧾 Pedido', nf: '🧾 NF', pagamento: '💰 Pagamento' };
+const TIPO_ROTULO = { empenho: ['receipt', 'Empenho'], item: ['file-text', 'Item'], pedido: ['clipboard-list', 'Pedido'], nf: ['file-invoice', 'NF'], pagamento: ['cash', 'Pagamento'] };
 
 async function carregar() {
     $('tbodyHist').innerHTML = linhaCarregando(5);
@@ -32,11 +32,11 @@ function renderHist() {
         (!acao || h.acao === acao) && (!usuario || h.usuario === usuario) &&
         (!busca || normalizar(`${h.descricao} ${h.ne || ''} ${h.usuario}`).includes(busca)));
     $('tbodyHist').innerHTML = lista.length ? lista.map(h => {
-        const [rot, cls] = ACAO_ROTULO[h.acao] || [h.acao, 'neutro'];
+        const [icone, rot, cls] = ACAO_ROTULO[h.acao] || ['history', h.acao, 'neutro'];
         return `<tr>
             <td class="nowrap">${dataBR(h.quando)}</td>
             <td>${escapeHTML(h.usuario)}</td>
-            <td><span class="badge ${cls}">${rot}</span></td>
+            <td><span class="badge ${cls}">${ico(icone)} ${rot}</span></td>
             <td>${h.ne ? `<a href="/empenhos?id=${h.empenho_id}">${escapeHTML(h.ne)}</a>` : '<span class="muted">—</span>'}</td>
             <td class="text-left">${escapeHTML(h.descricao)}</td>
         </tr>`;
@@ -49,10 +49,10 @@ function renderLixo() {
         <tr>
             <td class="nowrap">${dataBR(l.quando)}</td>
             <td>${escapeHTML(l.usuario)}</td>
-            <td>${TIPO_ROTULO[l.tipo] || escapeHTML(l.tipo)}</td>
+            <td>${TIPO_ROTULO[l.tipo] ? `<span class="com-ico">${ico(TIPO_ROTULO[l.tipo][0])} ${TIPO_ROTULO[l.tipo][1]}</span>` : escapeHTML(l.tipo)}</td>
             <td class="text-left">${escapeHTML(l.descricao)}</td>
-            <td><button class="btn btn-sm btn-secondary" onclick="restaurar(${l.id}, this)">♻️ Restaurar</button></td>
-        </tr>`).join('') : `<tr><td colspan="5" class="empty"><span class="empty-icon">🗑</span>A lixeira está vazia.</td></tr>`;
+            <td><button class="btn btn-sm btn-secondary" onclick="restaurar(${l.id}, this)">${ico('restore')} Restaurar</button></td>
+        </tr>`).join('') : `<tr><td colspan="5" class="empty"><span class="empty-icon">${ico('trash', 'ico ico-empty')}</span>A lixeira está vazia.</td></tr>`;
 }
 
 async function restaurar(id, btn) {

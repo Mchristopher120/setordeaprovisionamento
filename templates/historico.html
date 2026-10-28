@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from '_icones.html' import icone as ico %}<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
@@ -12,13 +12,13 @@
     <script src="{{ url_for('static', filename='tema.js') }}"></script>
 </head>
 <body>
-    {% set pagina = 'historico' %}{% set icone = '🕘' %}{% set titulo = 'Histórico & Lixeira' %}{% set subtitulo = 'Quem fez o quê • Restaurar exclusões' %}
+    {% set pagina = 'historico' %}{% set icone_nome = 'history' %}{% set titulo = 'Histórico & Lixeira' %}{% set subtitulo = 'Quem fez o quê • Restaurar exclusões' %}
     {% include '_topbar.html' %}
 
     <main class="container">
         <div class="tabs" role="tablist">
-            <button class="tab active" role="tab" aria-selected="true" data-tab="hist">🕘 Histórico de alterações</button>
-            <button class="tab" role="tab" aria-selected="false" data-tab="lixo">🗑 Lixeira <span class="count-badge" id="lixoCount">0</span></button>
+            <button class="tab active" role="tab" aria-selected="true" data-tab="hist">{{ ico('history') }} Histórico de alterações</button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="lixo">{{ ico('trash') }} Lixeira <span class="count-badge" id="lixoCount">0</span></button>
         </div>
 
         <section class="card" id="tab-hist">
@@ -63,6 +63,7 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+    <script src="{{ url_for('static', filename='icones.js') }}"></script>
     <script src="{{ url_for('static', filename='ui.js') }}"></script>
     <script src="{{ url_for('static', filename='historico.js') }}"></script>
 </body>
