@@ -8,7 +8,7 @@
     <script src="{{ url_for('static', filename='tema.js') }}"></script>
 </head>
 <body>
-    {% set pagina = 'empenhos' %}{% set icone = '📦' %}{% set titulo = 'Empenhos, Pedidos & Recebimentos' %}{% set subtitulo = 'Cadastro por item • Liquidação (NF) • Pagamento (OB)' %}
+    {% set pagina = 'empenhos' %}{% set icone = '📦' %}{% set titulo = 'Empenhos, Pedidos & Recebimentos' %}{% set subtitulo = 'Cadastro por item • Liquidação e pagamento por NF' %}
     {% include '_topbar.html' %}
 
     <main class="container">
@@ -21,7 +21,7 @@
                 <button id="btnNew" class="btn btn-primary">＋ Novo Empenho</button>
             </div>
             <div class="toolbar" role="search">
-                <input type="search" id="fBusca" class="input" placeholder="Buscar por NE, credor ou processo…" aria-label="Buscar">
+                <input type="search" id="fBusca" class="input" placeholder="Buscar por NE, fornecedor ou processo…" aria-label="Buscar">
                 <select id="fSituacao" class="input" aria-label="Situação">
                     <option value="">Todas as situações</option>
                     <option value="ANDAMENTO">Em andamento</option>
@@ -29,8 +29,10 @@
                     <option value="SEM_ITENS">Sem itens</option>
                     <option value="ATRASO">Com pedido atrasado</option>
                 </select>
+                <select id="fFornecedor" class="input" aria-label="Fornecedor"><option value="">Todos os fornecedores</option></select>
                 <select id="fAno" class="input" aria-label="Ano"><option value="">Todos os anos</option></select>
                 <label class="check"><input type="checkbox" id="fSaldo"> Só com saldo a liquidar</label>
+                <label class="check"><input type="checkbox" id="fAgrupar" checked> Agrupar por fornecedor</label>
                 <button id="btnLimparFiltros" class="btn btn-link btn-sm" hidden>Limpar filtros</button>
             </div>
             <div class="table-wrap">
@@ -38,7 +40,7 @@
                     <thead>
                         <tr>
                             <th data-key="ne">NE</th>
-                            <th data-key="nome_credor">Credor</th>
+                            <th data-key="nome_credor" class="col-forn">Fornecedor</th>
                             <th data-key="processo">Processo</th>
                             <th data-key="valor_empenhado" data-default="desc">Empenhado</th>
                             <th data-key="valor_liquidado" data-default="desc">Liquidado</th>
@@ -114,18 +116,8 @@
                 </table>
             </div>
 
-            <div class="section-head mt-section">
-                <h4>Pagamentos (OB)</h4>
-                <button id="btnNovoPagamento" class="btn btn-secondary btn-sm">＋ Registrar Pagamento</button>
-            </div>
-            <div class="table-wrap">
-                <table id="tblPagamentos">
-                    <thead>
-                        <tr><th>OB</th><th>Data</th><th>Valor</th><th>NF</th><th>Observações</th><th></th></tr>
-                    </thead>
-                    <tbody id="tbodyPagamentos"></tbody>
-                </table>
-            </div>
+            <p class="hint mt-small">💰 O pagamento é marcado em cada NF: clique em <strong>🧾 NFs</strong> no pedido e use <strong>✓ Marcar como paga</strong>.</p>
+            <div id="secObsAntigas"></div>
 
             <details class="historico-box mt-section" id="boxHistorico">
                 <summary>🕘 Histórico deste empenho</summary>
@@ -143,7 +135,7 @@
                 <input type="text" id="mNe" placeholder="ex: 2026NE000012">
                 <label for="mProcesso">Processo</label>
                 <input type="text" id="mProcesso" placeholder="Nº do processo (opcional)">
-                <label for="mCredor">Credor *</label>
+                <label for="mCredor">Fornecedor *</label>
                 <input type="text" id="mCredor" placeholder="Nome do fornecedor">
             </div>
             <div class="modal-actions">
@@ -292,39 +284,6 @@
             <div id="nfCorpo" class="nf-list"></div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" data-close>Fechar</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- MODAL PAGAMENTO -->
-    <div class="modal" id="modalPagamento">
-        <div role="dialog" aria-modal="true" aria-labelledby="pagTitulo" class="modal-box">
-            <h3 id="pagTitulo">Registrar Pagamento (OB)</h3>
-            <div class="modal-body">
-                <p class="muted" id="pagInfo"></p>
-                <div class="form-grid">
-                    <div>
-                        <label for="pgOb">Nº da OB *</label>
-                        <input type="text" id="pgOb" placeholder="ex: 2026OB000123">
-                    </div>
-                    <div>
-                        <label for="pgData">Data do pagamento</label>
-                        <input type="date" id="pgData">
-                    </div>
-                </div>
-                <label for="pgValor">Valor pago (R$) *</label>
-                <div class="input-hint">
-                    <input type="text" id="pgValor" inputmode="decimal" placeholder="0,00">
-                    <button type="button" id="pgTudo" class="btn btn-sm btn-secondary">Tudo</button>
-                </div>
-                <label for="pgNf">NF(s) referente(s)</label>
-                <input type="text" id="pgNf" placeholder="ex: 4501, 4502">
-                <label for="pgObs">Observações</label>
-                <input type="text" id="pgObs">
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" data-close>Cancelar</button>
-                <button id="btnSalvarPagamento" class="btn btn-primary">Registrar Pagamento</button>
             </div>
         </div>
     </div>

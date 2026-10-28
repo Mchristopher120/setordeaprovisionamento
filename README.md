@@ -1,6 +1,6 @@
 # Dashboard de Aprovisionamento
 
-Sistema para gestão de **Notas de Empenho (NE)** por item, com acompanhamento de **pedidos**, **recebimentos (NF / liquidação)**, **pagamentos (OB)** e **saldos** físico e financeiro.
+Sistema para gestão de **Notas de Empenho (NE)** por item, com acompanhamento de **pedidos**, **recebimentos (NF / liquidação)**, **pagamento por NF** e **saldos** físico e financeiro.
 
 ## Requisitos
 - Python 3.10+
@@ -26,26 +26,26 @@ Após 5 senhas erradas em 15 minutos, o acesso daquele endereço fica bloqueado 
 ## Como usar
 1. Dê dois cliques em **`INICIAR.bat`** (abre o servidor e o navegador em `http://localhost:5000`).
 2. Em **📦 Empenhos**, cadastre:
-   - **Empenho**: número da NE, processo e credor.
+   - **Empenho**: número da NE, processo e fornecedor. A lista agrupa os empenhos por fornecedor, com subtotais (dá para desligar em "Agrupar por fornecedor").
    - **Itens**: digite na tabelinha ou **cole direto do Excel** (colunas: Item, Descrição, Und, Qtde, Valor unit.). Também aceita arquivo `.csv`. Valores com vírgula ou ponto (`22,50` ou `22.50`).
    - **Pedido**: itens, quantidades e **prazo de entrega** (padrão 30 dias). O PDF para o fornecedor sai pelo botão 📄.
    - **Recebimento**: NF + quantidades que chegaram. Isso dá baixa no saldo físico e **liquida** o valor.
-   - **Pagamento**: número da OB, data e valor (até o que está liquidado).
+   - **Pagamento**: no pedido, abra **🧾 NFs** e clique em **✓ Marcar como paga** na NF. O botão fica destacado enquanto houver NF a pagar. Dá para desfazer.
 3. **🕘 Histórico** mostra quem fez cada alteração. A aba **Lixeira** permite restaurar exclusões.
-4. **⬇ Excel** baixa uma planilha com empenhos, itens, pedidos, NFs e pagamentos.
+4. **⬇ Excel** baixa uma planilha com empenhos, itens, pedidos e NFs (com a situação de pagamento de cada uma).
 5. **Tema**: o botão 🖥️/🌙/☀️ no topo alterna entre automático (segue o sistema), escuro e claro. A escolha fica salva no navegador.
 
 ## Regras do sistema
 - **Saldo físico** = qtde empenhada − recebido.
 - **Saldo a pedir** = qtde empenhada − recebido − pedido em aberto. Um pedido novo não pode passar dele.
 - **Liquidado** = Σ (qtde recebida × valor unitário), vindo das NFs.
-- **Pago** = Σ pagamentos (OB). Não pode passar do liquidado.
+- **Pago** = Σ valor das NFs marcadas como pagas.
 - **A liquidar** = empenhado − liquidado · **A pagar** = liquidado − pago.
 - **Reforço / anulação** (botão ±) altera a quantidade do item e guarda o documento. A anulação vai até o saldo a pedir.
 - **Status do pedido**: `Aguardando` → `Parcial` → `Recebido`. **Encerrado** é o pedido fechado manualmente: o que faltava volta ao saldo a pedir.
 - **Atrasado** = pedido aguardando ou parcial com a data de entrega (data + prazo) vencida.
 - O recebimento aceita só os itens do pedido e até o que falta chegar.
-- **Exclusões vão para a lixeira**, com tudo o que saiu junto. NF, item ou pedido com valor já pago (OB) só podem ser excluídos depois de excluir o pagamento.
+- **Exclusões vão para a lixeira**, com tudo o que saiu junto. NF paga não pode ser corrigida nem excluída (nem o item ou pedido dela, nem o valor unitário do item alterado) até desfazer o pagamento.
 
 ## Banco de dados
 - **Local (desenvolvimento)**: SQLite em `aprov.db`, usado automaticamente quando `DATABASE_URL` **não** está definida.

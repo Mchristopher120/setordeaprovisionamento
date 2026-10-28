@@ -198,6 +198,9 @@ COLUNAS_NOVAS = [
     ("pedidos", "prazo_dias", "INTEGER"),
     ("pedidos", "encerrado", "INTEGER DEFAULT 0"),
     ("pedidos", "encerrado_em", "TEXT"),
+    # Pagamento marcado direto na NF (substitui o lançamento separado de OB)
+    ("recebimentos", "pago_em", "TEXT"),
+    ("recebimentos", "pago_por", "TEXT"),
 ]
 
 
@@ -495,7 +498,7 @@ def restaurar_snapshot(db, dados):
 #   * RESERVADO      = o que está pedido em pedidos ABERTOS e ainda não chegou
 #   * SALDO A PEDIR  = qtde_empenhada − recebido − reservado
 #   * LIQUIDADO      = Σ (qtde recebida × valor unitário)   [vem das NFs]
-#   * PAGO           = Σ pagamentos (OB) do empenho
+#   * PAGO           = Σ valor das NFs marcadas como pagas
 #   * A LIQUIDAR     = valor empenhado − liquidado
 #   * A PAGAR        = liquidado − pago
 #   * qtde_empenhada já reflete reforços/anulações (histórico em movimentos_item)
@@ -605,7 +608,8 @@ def financeiro_empenhos(db):
         " (SELECT COALESCE(SUM(i.valor_total),0) FROM itens i WHERE i.empenho_id = e.id) as valor_empenhado,"
         " (SELECT COALESCE(SUM(r.qtde_recebida * i2.valor_unitario),0)"
         "   FROM recebimentos r JOIN itens i2 ON i2.id = r.item_id WHERE i2.empenho_id = e.id) as valor_liquidado,"
-        " (SELECT COALESCE(SUM(pg.valor),0) FROM pagamentos pg WHERE pg.empenho_id = e.id) as valor_pago,"
+        " (SELECT COALESCE(SUM(rp.qtde_recebida * ip.valor_unitario),0) FROM recebimentos rp"
+        "   JOIN itens ip ON ip.id = rp.item_id WHERE ip.empenho_id = e.id AND rp.pago_em IS NOT NULL) as valor_pago,"
         " (SELECT COUNT(*) FROM itens i3 WHERE i3.empenho_id = e.id AND i3.qtde_empenhada > 0) as qt_itens,"
         " (SELECT COUNT(*) FROM itens i4 WHERE i4.empenho_id = e.id AND i4.qtde_empenhada > 0"
         "   AND (SELECT COALESCE(SUM(r2.qtde_recebida),0) FROM recebimentos r2 WHERE r2.item_id = i4.id)"
@@ -640,7 +644,10 @@ def liquidado_e_pago(db, eid):
         "SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v"
         " FROM recebimentos r JOIN itens i ON i.id = r.item_id WHERE i.empenho_id = ?", (eid,)
     ).fetchone()["v"]
-    pago = db.execute("SELECT COALESCE(SUM(valor),0) as v FROM pagamentos WHERE empenho_id = ?", (eid,)).fetchone()["v"]
+    pago = db.execute(
+        "SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v FROM recebimentos r"
+        " JOIN itens i ON i.id = r.item_id WHERE i.empenho_id = ? AND r.pago_em IS NOT NULL", (eid,)
+    ).fetchone()["v"]
     return float(liq or 0), float(pago or 0)
 
 
@@ -689,7 +696,7 @@ def api_criar_empenho():
     if not ne:
         return erro("Informe o número do empenho (NE)")
     if not nome_credor:
-        return erro("Informe o credor")
+        return erro("Informe o fornecedor")
     db = get_db()
     cur = db.execute(
         "INSERT INTO empenhos (ne, processo, nome_credor, criado_em) VALUES (?,?,?,?)",
@@ -711,10 +718,10 @@ def api_editar_empenho(eid):
     credor = (data.get("nome_credor") or "").strip().upper()
     processo = (data.get("processo") or "").strip()
     if not ne or not credor:
-        return erro("NE e credor são obrigatórios")
+        return erro("NE e fornecedor são obrigatórios")
     db.execute("UPDATE empenhos SET ne=?, processo=?, nome_credor=? WHERE id=?", (ne, processo, credor, eid))
     mud = [f"{c}: {e[k] or '—'} → {v or '—'}" for c, k, v in
-           (("NE", "ne", ne), ("Credor", "nome_credor", credor), ("Processo", "processo", processo)) if (e[k] or "") != v]
+           (("NE", "ne", ne), ("Fornecedor", "nome_credor", credor), ("Processo", "processo", processo)) if (e[k] or "") != v]
     registrar(db, "EDITAR", "empenho", eid, eid, f"Empenho {ne} editado" + (": " + "; ".join(mud) if mud else ""))
     db.commit()
     return jsonify({"ok": True})
@@ -732,7 +739,8 @@ def api_detalhe_empenho(eid):
     for p in db.execute(
         "SELECT p.*,"
         " (SELECT COUNT(*) FROM pedido_itens pi WHERE pi.pedido_id = p.id) as qt_itens,"
-        " (SELECT COUNT(*) FROM recebimentos r WHERE r.pedido_id = p.id) as qt_recebimentos"
+        " (SELECT COUNT(*) FROM recebimentos r WHERE r.pedido_id = p.id) as qt_recebimentos,"
+        " (SELECT COUNT(*) FROM recebimentos r2 WHERE r2.pedido_id = p.id AND r2.pago_em IS NULL) as qt_linhas_a_pagar"
         " FROM pedidos p WHERE p.empenho_id = ? ORDER BY p.id DESC", (eid,)
     ).fetchall():
         pd = dict(p)
@@ -743,6 +751,16 @@ def api_detalhe_empenho(eid):
         pd["vencimento"] = rs.get("vencimento")
         pd["dias_atraso"] = rs.get("dias_atraso", 0)
         pedidos.append(pd)
+    nfs = _grupos_nf(db.execute(
+        "SELECT r.id, r.pedido_id, r.nf, r.data_recebimento, r.observacoes, r.item_id, r.qtde_recebida, r.pago_em, r.pago_por,"
+        " i.numero_item, i.descricao, i.und, i.valor_unitario"
+        " FROM recebimentos r JOIN itens i ON i.id = r.item_id JOIN pedidos p ON p.id = r.pedido_id"
+        " WHERE p.empenho_id = ? ORDER BY r.id", (eid,)).fetchall(), por_pedido=True)
+    for pd in pedidos:
+        das_nfs = [n for n in nfs if n["pedido_id"] == pd["id"]]
+        pd["qt_nfs"] = len(das_nfs)
+        pd["qt_nfs_a_pagar"] = sum(1 for n in das_nfs if not n["pago_em"])
+    # Pagamentos (OB) lançados no modo antigo, antes do "marcar NF como paga"
     pagamentos = _linhas(db, "SELECT * FROM pagamentos WHERE empenho_id = ? ORDER BY data_pagamento DESC, id DESC", (eid,))
     movimentos = _linhas(
         db, "SELECT m.*, i.numero_item, i.descricao, i.und FROM movimentos_item m JOIN itens i ON i.id = m.item_id"
@@ -753,7 +771,7 @@ def api_detalhe_empenho(eid):
         "empenho": dict(empenho),
         "itens": itens,
         "pedidos": pedidos,
-        "pagamentos": pagamentos,
+        "pagamentos_antigos": pagamentos,
         "movimentos": movimentos,
         "financeiro": {
             "empenhado": empenhado, "liquidado": liq, "pago": pago,
@@ -858,11 +876,9 @@ def api_editar_item(iid):
                     f"(já recebido {fmt_qtd(item['qtde_recebida'])} + pedido em aberto {fmt_qtd(item['reservado'])})")
     if vu < 0:
         return erro("Valor unitário não pode ser negativo")
-    # Mudar o valor unitário altera o liquidado: não pode ficar abaixo do já pago
-    liq, pago = liquidado_e_pago(db, item["empenho_id"])
-    novo_liq = liq - item["qtde_recebida"] * float(item["valor_unitario"] or 0) + item["qtde_recebida"] * vu
-    if novo_liq + 0.005 < pago:
-        return erro(f"Com esse valor unitário o liquidado ({fmt_brl(novo_liq)}) ficaria abaixo do já pago ({fmt_brl(pago)})")
+    # Mudar o valor unitário mudaria o valor de NFs já pagas
+    if abs(vu - float(item["valor_unitario"] or 0)) > EPS and _tem_nf_paga(db, "item_id", iid):
+        return erro("Este item tem NF marcada como paga. Desmarque o pagamento da NF antes de mudar o valor unitário.")
     db.execute(
         "UPDATE itens SET numero_item=?, descricao=?, und=?, qtde_empenhada=?, valor_unitario=?, valor_total=? WHERE id=?",
         (numero_item, descricao, und, qtde, vu, qtde * vu, iid),
@@ -920,11 +936,9 @@ def api_excluir_item(iid):
     if not item:
         return erro("Item não encontrado", 404)
     eid = item["empenho_id"]
-    # Excluir o item apaga as NFs dele, reduzindo o liquidado
-    liq, pago = liquidado_e_pago(db, eid)
-    rec = db.execute("SELECT COALESCE(SUM(qtde_recebida),0) as v FROM recebimentos WHERE item_id = ?", (iid,)).fetchone()["v"]
-    if liq - float(rec or 0) * float(item["valor_unitario"] or 0) + 0.005 < pago:
-        return erro("Este item já tem valor pago (OB). Exclua o pagamento antes de excluir o item.")
+    # Excluir o item apaga as NFs dele
+    if _tem_nf_paga(db, "item_id", iid):
+        return erro("Este item tem NF marcada como paga. Desmarque o pagamento da NF antes de excluir o item.")
     mandar_para_lixeira(db, "item", f"{nome_item(item)} com pedidos/NFs ligados a ele", eid, snapshot(db, item_id=iid))
     db.execute("DELETE FROM itens WHERE id = ?", (iid,))
     registrar(db, "EXCLUIR", "item", iid, eid, f"{nome_item(item)} enviado para a lixeira")
@@ -1069,25 +1083,40 @@ def api_encerrar_pedido(pid):
     return jsonify({"ok": True})
 
 
-def _grupos_nf(recs):
-    """Agrupa as linhas de recebimento por NF + data (uma 'nota')."""
+def _grupos_nf(recs, por_pedido=False):
+    """Agrupa as linhas de recebimento por NF + data (uma 'nota').
+    A NF conta como paga quando todas as suas linhas estão marcadas."""
     grupos = []
     for r in recs:
-        chave = ((r["nf"] or "").strip(), r["data_recebimento"] or "")
+        chave = ((r["pedido_id"] if por_pedido else None), (r["nf"] or "").strip(), r["data_recebimento"] or "")
         gr = next((x for x in grupos if x["_k"] == chave), None)
         item = {"item_id": r["item_id"], "numero_item": r["numero_item"], "descricao": r["descricao"],
                 "und": r["und"], "qtde_recebida": r["qtde_recebida"], "valor_unitario": r["valor_unitario"]}
         if gr is None:
-            grupos.append({"_k": chave, "ids": [r["id"]], "nf": r["nf"] or "—",
-                           "data_recebimento": r["data_recebimento"], "observacoes": r["observacoes"],
-                           "itens": [item]})
-        else:
-            gr["ids"].append(r["id"])
-            gr["itens"].append(item)
+            gr = {"_k": chave, "ids": [], "nf": r["nf"] or "—", "data_recebimento": r["data_recebimento"],
+                  "observacoes": r["observacoes"], "itens": [], "_pagos": []}
+            if por_pedido:
+                gr["pedido_id"] = r["pedido_id"]
+            grupos.append(gr)
+        gr["ids"].append(r["id"])
+        gr["itens"].append(item)
+        gr["_pagos"].append((r["pago_em"], r["pago_por"]))
     for gr in grupos:
         gr.pop("_k")
+        pagos = gr.pop("_pagos")
+        todos = all(pg[0] for pg in pagos)
+        gr["pago_em"] = pagos[0][0] if todos else None
+        gr["pago_por"] = pagos[0][1] if todos else None
         gr["valor"] = sum(float(i["qtde_recebida"] or 0) * float(i["valor_unitario"] or 0) for i in gr["itens"])
     return grupos
+
+
+def _tem_nf_paga(db, coluna, valor):
+    """Há alguma linha de NF paga para este item/pedido? (coluna é fixa no código)"""
+    assert coluna in ("item_id", "pedido_id")
+    return db.execute(
+        f"SELECT 1 as x FROM recebimentos WHERE {coluna} = ? AND pago_em IS NOT NULL LIMIT 1", (valor,)
+    ).fetchone() is not None
 
 
 @app.route("/api/pedidos/<int:pid>", methods=["GET"])
@@ -1116,7 +1145,7 @@ def api_detalhe_pedido(pid):
         itens.append(d)
 
     recs = db.execute(
-        "SELECT r.id, r.nf, r.data_recebimento, r.observacoes, r.item_id, r.qtde_recebida,"
+        "SELECT r.id, r.pedido_id, r.nf, r.data_recebimento, r.observacoes, r.item_id, r.qtde_recebida, r.pago_em, r.pago_por,"
         " i.numero_item, i.descricao, i.und, i.valor_unitario"
         " FROM recebimentos r LEFT JOIN itens i ON i.id = r.item_id WHERE r.pedido_id = ? ORDER BY r.id", (pid,)
     ).fetchall()
@@ -1316,13 +1345,8 @@ def api_excluir_pedido(pid):
     if not pedido:
         return erro("Pedido não encontrado", 404)
     eid = pedido["empenho_id"]
-    valor_nfs = db.execute(
-        "SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v FROM recebimentos r"
-        " JOIN itens i ON i.id = r.item_id WHERE r.pedido_id = ?", (pid,)
-    ).fetchone()["v"]
-    liq, pago = liquidado_e_pago(db, eid)
-    if liq - float(valor_nfs or 0) + 0.005 < pago:
-        return erro("As NFs deste pedido já têm pagamento (OB). Exclua o pagamento antes.")
+    if _tem_nf_paga(db, "pedido_id", pid):
+        return erro("Este pedido tem NF marcada como paga. Desmarque o pagamento da NF antes de excluir o pedido.")
     mandar_para_lixeira(db, "pedido", f"Pedido {pedido['numero_pedido']} com itens e NFs", eid, snapshot(db, pedido_id=pid))
     db.execute("DELETE FROM pedidos WHERE id = ?", (pid,))
     registrar(db, "EXCLUIR", "pedido", pid, eid, f"Pedido {pedido['numero_pedido']} enviado para a lixeira")
@@ -1418,6 +1442,9 @@ def api_editar_nf(pid):
     ids = _ids_da_nf(db, pid, data.get("ids"))
     if not ids:
         return erro("NF não encontrada neste pedido", 404)
+    if db.execute(f"SELECT 1 as x FROM recebimentos WHERE id IN ({_in(ids)}) AND pago_em IS NOT NULL LIMIT 1",
+                  tuple(ids)).fetchone():
+        return erro("Esta NF está marcada como paga. Desfaça o pagamento antes de corrigi-la.")
     nf = (data.get("nf") or "").strip()
     if not nf:
         return erro("Informe o número da NF")
@@ -1428,9 +1455,6 @@ def api_editar_nf(pid):
         f"SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v FROM recebimentos r JOIN itens i ON i.id = r.item_id"
         f" WHERE r.id IN ({_in(ids)})", tuple(ids)).fetchone()["v"]
     depois = sum(q * vu for _, q, vu in validos)
-    liq, pago = liquidado_e_pago(db, pedido["empenho_id"])
-    if liq - float(antes or 0) + depois + 0.005 < pago:
-        return erro(f"Com essa correção o liquidado ficaria abaixo do já pago ({fmt_brl(pago)}). Ajuste o pagamento antes.")
     antiga = db.execute(f"SELECT nf, criado_em FROM recebimentos WHERE id IN ({_in(ids)})", tuple(ids)).fetchone()
     db.execute(f"DELETE FROM recebimentos WHERE id IN ({_in(ids)})", tuple(ids))
     data_rec = (data.get("data_recebimento") or "").strip()[:10] or date.today().isoformat()
@@ -1459,12 +1483,12 @@ def api_excluir_nf(pid):
     ids = _ids_da_nf(db, pid, data.get("ids"))
     if not ids:
         return erro("NF não encontrada neste pedido", 404)
+    if db.execute(f"SELECT 1 as x FROM recebimentos WHERE id IN ({_in(ids)}) AND pago_em IS NOT NULL LIMIT 1",
+                  tuple(ids)).fetchone():
+        return erro("Esta NF está marcada como paga. Desfaça o pagamento antes de excluí-la.")
     valor = db.execute(
         f"SELECT COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v FROM recebimentos r JOIN itens i ON i.id = r.item_id"
         f" WHERE r.id IN ({_in(ids)})", tuple(ids)).fetchone()["v"]
-    liq, pago = liquidado_e_pago(db, pedido["empenho_id"])
-    if liq - float(valor or 0) + 0.005 < pago:
-        return erro(f"Esta NF já tem pagamento (OB). Excluí-la deixaria o liquidado abaixo do pago ({fmt_brl(pago)}).")
     nf = db.execute(f"SELECT nf FROM recebimentos WHERE id IN ({_in(ids)})", tuple(ids)).fetchone()["nf"]
     mandar_para_lixeira(db, "nf", f"NF {nf} do pedido {pedido['numero_pedido']} ({fmt_brl(valor)})",
                         pedido["empenho_id"], snapshot(db, recebimento_ids=ids))
@@ -1475,36 +1499,38 @@ def api_excluir_nf(pid):
     return jsonify({"ok": True})
 
 
-# ============================================================================
-# PAGAMENTOS (OB)
-# ============================================================================
-@app.route("/api/empenhos/<int:eid>/pagamentos", methods=["POST"])
-def api_registrar_pagamento(eid):
+@app.route("/api/pedidos/<int:pid>/nfs/pagar", methods=["POST"])
+def api_pagar_nf(pid):
+    """Marca (ou desmarca) uma NF como paga. Body: { ids: [...linhas da NF], pago: true|false }"""
     data = request.json or {}
     db = get_db()
-    empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (eid,)).fetchone()
-    if not empenho:
-        return erro("Empenho não encontrado", 404)
-    ob = (data.get("ob") or "").strip()
-    valor = round(parse_money(data.get("valor")), 2)
-    if not ob:
-        return erro("Informe o número da OB")
-    if valor <= 0:
-        return erro("Informe o valor pago")
-    liq, pago = liquidado_e_pago(db, eid)
-    if pago + valor > liq + 0.005:
-        return erro(f"Valor acima do que falta pagar: liquidado {fmt_brl(liq)}, já pago {fmt_brl(pago)}, "
-                    f"a pagar {fmt_brl(max(0, liq - pago))}")
-    cur = db.execute(
-        "INSERT INTO pagamentos (empenho_id, ob, data_pagamento, valor, nf, observacoes, criado_em) VALUES (?,?,?,?,?,?,?)",
-        (eid, ob, (data.get("data_pagamento") or date.today().isoformat())[:10], valor,
-         (data.get("nf") or "").strip(), (data.get("observacoes") or "").strip(), agora()),
-    )
-    registrar(db, "PAGAR", "pagamento", cur.lastrowid, eid, f"OB {ob} registrada: {fmt_brl(valor)}")
+    pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
+    if not pedido:
+        return erro("Pedido não encontrado", 404)
+    ids = _ids_da_nf(db, pid, data.get("ids"))
+    if not ids:
+        return erro("NF não encontrada neste pedido", 404)
+    pagar = data.get("pago", True) is not False
+    info = db.execute(
+        f"SELECT MIN(r.nf) as nf, COALESCE(SUM(r.qtde_recebida * i.valor_unitario),0) as v"
+        f" FROM recebimentos r JOIN itens i ON i.id = r.item_id WHERE r.id IN ({_in(ids)})", tuple(ids)).fetchone()
+    if pagar:
+        db.execute(f"UPDATE recebimentos SET pago_em = ?, pago_por = ? WHERE id IN ({_in(ids)})",
+                   (agora(), usuario_atual(), *ids))
+        registrar(db, "PAGAR", "nf", pid, pedido["empenho_id"],
+                  f"NF {info['nf']} do pedido {pedido['numero_pedido']} marcada como paga ({fmt_brl(info['v'])})")
+    else:
+        db.execute(f"UPDATE recebimentos SET pago_em = NULL, pago_por = NULL WHERE id IN ({_in(ids)})", tuple(ids))
+        registrar(db, "DESFAZER", "nf", pid, pedido["empenho_id"],
+                  f"Pagamento da NF {info['nf']} do pedido {pedido['numero_pedido']} desfeito ({fmt_brl(info['v'])})")
     db.commit()
-    return jsonify({"ok": True, "id": cur.lastrowid})
+    return jsonify({"ok": True, "nf": info["nf"], "valor": float(info["v"] or 0), "pago": pagar})
 
 
+# ============================================================================
+# PAGAMENTOS (OB) — modo antigo. Mantido só para consultar/excluir o que já
+# foi lançado antes de o pagamento passar a ser marcado direto na NF.
+# ============================================================================
 @app.route("/api/pagamentos/<int:pgid>", methods=["DELETE"])
 def api_excluir_pagamento(pgid):
     db = get_db()
@@ -1643,7 +1669,7 @@ def api_stats_empenhos():
 
 @app.route("/api/evolucao")
 def api_evolucao():
-    """Liquidado (NFs) e pago (OBs) por mês, nos últimos 12 meses."""
+    """Liquidado (NFs recebidas) e pago (NFs marcadas como pagas) por mês, nos últimos 12 meses."""
     db = get_db()
     hoje = date.today()
     meses = []
@@ -1663,8 +1689,10 @@ def api_evolucao():
         k = (r["d"] or "")[:7]
         if k in liq:
             liq[k] += float(r["v"] or 0)
-    for r in db.execute("SELECT data_pagamento as d, valor as v FROM pagamentos WHERE data_pagamento >= ?",
-                        (meses[0] + "-01",)).fetchall():
+    for r in db.execute(
+        "SELECT r.pago_em as d, r.qtde_recebida * i.valor_unitario as v FROM recebimentos r"
+        " JOIN itens i ON i.id = r.item_id WHERE r.pago_em >= ?", (meses[0] + "-01",)
+    ).fetchall():
         k = (r["d"] or "")[:7]
         if k in pag:
             pag[k] += float(r["v"] or 0)
@@ -1707,7 +1735,7 @@ def api_exportar():
     lista = financeiro_empenhos(db)
     sit = {"SEM_ITENS": "Sem itens", "ANDAMENTO": "Em andamento", "CONCLUIDO": "Concluído"}
     aba("Empenhos",
-        ["NE", "Credor", "Processo", "Situação", "Empenhado", "Liquidado", "Pago", "A liquidar", "A pagar", "% Liquidado", "% Pago"],
+        ["NE", "Fornecedor", "Processo", "Situação", "Empenhado", "Liquidado", "Pago", "A liquidar", "A pagar", "% Liquidado", "% Pago"],
         [[e["ne"], e["nome_credor"], e["processo"], sit[e["situacao"]], e["valor_empenhado"], e["valor_liquidado"],
           e["valor_pago"], e["a_liquidar"], e["a_pagar"], e["percentual_liquidado"], e["percentual_pago"]] for e in lista],
         {5: MOEDA, 6: MOEDA, 7: MOEDA, 8: MOEDA, 9: MOEDA, 10: PCT, 11: PCT})
@@ -1715,7 +1743,7 @@ def api_exportar():
     nes = {e["id"]: e for e in lista}
     itens = [completar_item(r) for r in db.execute(SQL_ITENS + " ORDER BY i.empenho_id, i.id").fetchall()]
     aba("Itens",
-        ["NE", "Credor", "Item", "Descrição", "Und", "Qtde empenhada", "Valor unit.", "Valor total", "Recebido",
+        ["NE", "Fornecedor", "Item", "Descrição", "Und", "Qtde empenhada", "Valor unit.", "Valor total", "Recebido",
          "Saldo físico", "Pedido em aberto", "Saldo a pedir", "Liquidado", "A liquidar"],
         [[nes.get(i["empenho_id"], {}).get("ne"), nes.get(i["empenho_id"], {}).get("nome_credor"), i["numero_item"],
           i["descricao"], i["und"], i["qtde_empenhada"], i["valor_unitario"], i["valor_total"], i["qtde_recebida"],
@@ -1726,7 +1754,7 @@ def api_exportar():
     st = {"INCLUIDO": "Aguardando", "PARCIAL": "Parcial", "RECEBIDO": "Recebido", "ENCERRADO": "Encerrado"}
     peds = db.execute("SELECT * FROM pedidos ORDER BY empenho_id, id").fetchall()
     aba("Pedidos",
-        ["NE", "Credor", "Pedido", "Data", "Prazo (dias)", "Vencimento", "Status", "Dias de atraso", "Qtde pedida", "Qtde recebida"],
+        ["NE", "Fornecedor", "Pedido", "Data", "Prazo (dias)", "Vencimento", "Status", "Dias de atraso", "Qtde pedida", "Qtde recebida"],
         [[nes.get(p["empenho_id"], {}).get("ne"), nes.get(p["empenho_id"], {}).get("nome_credor"), p["numero_pedido"],
           data_br(p["data_pedido"]), p["prazo_dias"], data_br(resumo[p["id"]]["vencimento"]),
           st[resumo[p["id"]]["status"]], resumo[p["id"]]["dias_atraso"] or None,
@@ -1737,19 +1765,23 @@ def api_exportar():
         "SELECT r.*, i.numero_item, i.descricao, i.und, i.valor_unitario, p.numero_pedido FROM recebimentos r"
         " JOIN itens i ON i.id = r.item_id JOIN pedidos p ON p.id = r.pedido_id ORDER BY r.empenho_id, r.data_recebimento, r.id"
     ).fetchall()
-    aba("NFs (liquidação)",
-        ["NE", "Pedido", "NF", "Data", "Item", "Descrição", "Und", "Qtde", "Valor unit.", "Valor liquidado"],
-        [[nes.get(r["empenho_id"], {}).get("ne"), r["numero_pedido"], r["nf"], data_br(r["data_recebimento"]),
-          r["numero_item"], r["descricao"], r["und"], r["qtde_recebida"], r["valor_unitario"],
-          float(r["qtde_recebida"] or 0) * float(r["valor_unitario"] or 0)] for r in recs],
-        {8: QTD, 9: MOEDA, 10: MOEDA})
+    aba("NFs",
+        ["NE", "Fornecedor", "Pedido", "NF", "Data", "Item", "Descrição", "Und", "Qtde", "Valor unit.", "Valor",
+         "Pagamento", "Paga em", "Marcada por"],
+        [[nes.get(r["empenho_id"], {}).get("ne"), nes.get(r["empenho_id"], {}).get("nome_credor"), r["numero_pedido"],
+          r["nf"], data_br(r["data_recebimento"]), r["numero_item"], r["descricao"], r["und"], r["qtde_recebida"],
+          r["valor_unitario"], float(r["qtde_recebida"] or 0) * float(r["valor_unitario"] or 0),
+          "Paga" if r["pago_em"] else "A pagar", data_br(r["pago_em"]) if r["pago_em"] else None, r["pago_por"]]
+         for r in recs],
+        {9: QTD, 10: MOEDA, 11: MOEDA})
 
     pags = db.execute("SELECT * FROM pagamentos ORDER BY empenho_id, data_pagamento, id").fetchall()
-    aba("Pagamentos (OB)",
-        ["NE", "Credor", "OB", "Data", "Valor", "NF", "Observações"],
-        [[nes.get(p["empenho_id"], {}).get("ne"), nes.get(p["empenho_id"], {}).get("nome_credor"), p["ob"],
-          data_br(p["data_pagamento"]), p["valor"], p["nf"], p["observacoes"]] for p in pags],
-        {5: MOEDA})
+    if pags:  # só aparece se houver OBs lançadas no modo antigo
+        aba("OBs (modo antigo)",
+            ["NE", "Fornecedor", "OB", "Data", "Valor", "NF", "Observações"],
+            [[nes.get(p["empenho_id"], {}).get("ne"), nes.get(p["empenho_id"], {}).get("nome_credor"), p["ob"],
+              data_br(p["data_pagamento"]), p["valor"], p["nf"], p["observacoes"]] for p in pags],
+            {5: MOEDA})
 
     buf = io.BytesIO()
     wb.save(buf)
