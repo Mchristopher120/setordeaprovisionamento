@@ -75,6 +75,9 @@ function renderKpis(s) {
         <div class="kpi green"><div class="kpi-label">Pago</div><div class="kpi-value">${fmtMoney(s.valor_pago)}</div><div class="kpi-sub">A pagar ${fmtMoneyCurto(s.valor_a_pagar)}</div></div>
         <div class="kpi amber"><div class="kpi-label">Pedidos em Aberto</div><div class="kpi-value">${fmtNum(s.pedidos_em_aberto)}</div>
             <div class="kpi-sub">${s.pedidos_atrasados ? `<span class="text-red"><strong>${fmtNum(s.pedidos_atrasados)}</strong> atrasado(s)</span>` : 'nenhum atrasado'}</div></div>`;
+    // A fonte Inter pode demorar um instante; ajusta de novo quando ela terminar de carregar
+    ajustarValores(document.getElementById('kpis'));
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => ajustarValores(document.getElementById('kpis')));
 }
 
 function preencherAnos() {
