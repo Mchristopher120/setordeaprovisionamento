@@ -47,16 +47,10 @@ EPS = 1e-9  # tolerância para comparar quantidades em ponto flutuante
 UNIDADE_PDF = {
     "nome": "3º Centro de Geoinformação",
     "setor": "Setor de Aprovisionamento",
-    "cidade": "Olinda - PE",
     "endereco": "Av. Dr. Joaquim Nabuco, 1687 - Ouro Preto, Olinda - PE, 53370-285",
     "horario": "das 09h30 às 16h00",
     "email": "aprov3dl@gmail.com",
-    "assinaturas": ["1º Tenente Christopher", "3º Sgt Ítalo"],
 }
-
-MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
-         "agosto", "setembro", "outubro", "novembro", "dezembro"]
-
 
 def valor_por_extenso(valor):
     """1234.5 -> 'mil, duzentos e trinta e quatro reais e cinquenta centavos'."""
@@ -378,7 +372,7 @@ def usuario_atual():
     return session.get("nome") or ("local" if not auth_ativa() else "?")
 
 
-ROTAS_LIVRES = {"login", "logout", "static"}
+ROTAS_LIVRES = {"login", "logout", "static", "favicon"}
 
 
 @app.before_request
@@ -447,6 +441,12 @@ def login():
                 destino = "/"
             return redirect(destino)
     return render_template("login.html", erro=erro_msg, nome=nome)
+
+
+@app.route("/favicon.ico")
+def favicon():
+    """Ícone da aba (folha de acanto da Intendência) — o navegador pede na raiz."""
+    return send_file(os.path.join(BASE_DIR, "static", "img", "favicon.ico"), mimetype="image/vnd.microsoft.icon", max_age=86400)
 
 
 @app.route("/logout")
@@ -1291,30 +1291,28 @@ def api_pedido_pdf(pid):
     LIGHT = (180, 196, 224)
     pdf.set_fill_color(*NAVY)
     pdf.rect(0, 0, 210, 30, "F")
-    # Brasão do 3º CGEO à esquerda do cabeçalho
+    # Brasão do 3º CGEO à esquerda e símbolo da Logística (folha de acanto) à direita
     brasao = os.path.join(BASE_DIR, "static", "img", "3cgeo.png")
     if os.path.exists(brasao):
         pdf.image(brasao, x=14, y=2.5, h=25)
+    folha = os.path.join(BASE_DIR, "static", "img", "logistica.png")
+    if os.path.exists(folha):
+        pdf.image(folha, x=210 - 12 - 30, y=(30 - 30 * 165 / 320) / 2, w=30)
+    pdf.set_text_color(*LIGHT)
+    pdf.set_y(7.5)
+    pdf.set_font("ArialU", "B", 10)
+    pdf.cell(0, 5.5, "EXÉRCITO BRASILEIRO", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(0.5)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_y(4.5)
-    pdf.set_font("ArialU", "B", 9)
-    pdf.cell(0, 5.5, "MINISTÉRIO DA DEFESA  •  EXÉRCITO BRASILEIRO", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(1)
     pdf.set_font("ArialBlk", "", 17)
     pdf.cell(0, 9, "3º CENTRO DE GEOINFORMAÇÃO", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("ArialU", "B", 9.5)
-    pdf.set_text_color(*LIGHT)
-    pdf.cell(0, 5.5, "DIRETORIA DE SERVIÇO GEOGRÁFICO", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.set_fill_color(*GOLD)
     pdf.rect(0, 30, 210, 2.5, "F")
 
-    pdf.ln(6)
+    pdf.set_y(32.5 + 6)  # abaixo da faixa dourada
     pdf.set_font("ArialBlk", "", 15)
     pdf.set_text_color(*NAVY)
     pdf.cell(0, 8, "SOLICITAÇÃO DE MATERIAL", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("ArialU", "B", 10)
-    pdf.set_text_color(70, 70, 80)
-    pdf.cell(0, 6, "PEDIDO DE ENTREGA", align="C", new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(3)
     pdf.set_text_color(*NAVY)
@@ -1323,8 +1321,10 @@ def api_pedido_pdf(pid):
     pdf.set_font("ArialBlk", "", 16)
     pdf.cell(0, 9, norm(empenho['ne'] if empenho else "-"), align="C", new_x="LMARGIN", new_y="NEXT")
     if empenho and empenho["nome_credor"]:
-        pdf.set_font("ArialU", "B", 11)
-        pdf.cell(0, 6, norm(empenho["nome_credor"]), align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1)
+        pdf.set_font("ArialBlk", "", 15)
+        pdf.multi_cell(0, 7.5, norm(empenho["nome_credor"]), align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1)
     pdf.set_font("ArialU", "B", 12)
     pdf.set_text_color(60, 60, 70)
     linha_data = f"DATA: {data_br(pedido['data_pedido']) or '-'}"
@@ -1466,35 +1466,6 @@ def api_pedido_pdf(pid):
         pdf.ln(1.2)
     pdf.set_y(y0 + caixa_h)
     pdf.set_draw_color(0, 0, 0)
-
-    # Local, data e assinaturas
-    h_ass = 5 + 6 + 12 + 12  # espaço + data + espaço para assinar + nomes
-    if pdf.get_y() + h_ass > LIMITE_Y:
-        pdf.add_page()
-    d = parse_data(pedido["data_pedido"]) or date.today()
-    pdf.ln(5)
-    pdf.set_font("ArialU", "", 10)
-    pdf.set_text_color(40, 40, 50)
-    pdf.cell(0, 6, f"{U['cidade']}, {d.day} de {MESES[d.month - 1]} de {d.year}.", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(12)
-    y_linha = pdf.get_y()
-    nomes = U["assinaturas"]
-    larg = 72
-    gap = (CONTENT_W - larg * len(nomes)) / (len(nomes) + 1)
-    pdf.set_draw_color(*NAVY)
-    pdf.set_line_width(0.3)
-    for k, nome_ass in enumerate(nomes):
-        x0 = 15 + gap + k * (larg + gap)
-        pdf.line(x0, y_linha, x0 + larg, y_linha)
-        pdf.set_xy(x0, y_linha + 1.5)
-        pdf.set_font("ArialU", "B", 10)
-        pdf.set_text_color(*NAVY)
-        pdf.cell(larg, 5.5, norm(nome_ass), align="C")
-        pdf.set_xy(x0, y_linha + 7)
-        pdf.set_font("ArialU", "", 8.5)
-        pdf.set_text_color(90, 90, 100)
-        pdf.cell(larg, 4.5, norm(U["setor"]), align="C")
-    pdf.set_line_width(0.2)
 
     # Propriedades do arquivo
     pdf.set_title(f"Pedido {norm(pedido['numero_pedido'])} - {ne_txt}")
