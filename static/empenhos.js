@@ -97,7 +97,10 @@ function filtrar(lista) {
     $('btnLimparFiltros').hidden = !(busca || sit || ano || saldo || forn);
     return lista.filter(e => {
         if (busca && !normalizar(`${e.ne} ${e.nome_credor} ${e.processo}`).includes(busca)) return false;
-        if (sit === 'ATRASO' ? !e.pedidos_atrasados : (sit && e.situacao !== sit)) return false;
+        if (sit === 'ATRASO') { if (!e.pedidos_atrasados) return false; }
+        else if (sit === 'VENCENDO') { if (!e.pedidos_vencendo) return false; }
+        else if (sit === 'APAGAR') { if (!e.nfs_a_pagar) return false; }
+        else if (sit && e.situacao !== sit) return false;
         if (ano && e.ano !== ano) return false;
         if (forn && e.nome_credor !== forn) return false;
         if (saldo && !(e.a_liquidar > 0.005)) return false;
@@ -113,7 +116,8 @@ function linhaEmpenho(e) {
         <tr>
             <td class="text-left"><strong>${esc(e.ne)}</strong>
                 <div class="cell-badges"><span class="badge ${cls}">${rot}</span>
-                ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">⏰ ${e.pedidos_atrasados} atrasado${e.pedidos_atrasados > 1 ? 's' : ''}</span>` : ''}</div></td>
+                ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">${ico('alarm')} ${e.pedidos_atrasados} atrasado${e.pedidos_atrasados > 1 ? 's' : ''}</span>` : ''}
+                ${e.nfs_a_pagar ? `<span class="badge atencao" title="NFs recebidas aguardando pagamento">${ico('cash')} ${e.nfs_a_pagar} NF${e.nfs_a_pagar > 1 ? 's' : ''} a pagar</span>` : ''}</div></td>
             <td class="col-forn">${esc(e.nome_credor)}</td>
             <td>${esc(e.processo)}</td>
             <td class="num money">${fmtMoney(e.valor_empenhado)}</td>
@@ -123,7 +127,7 @@ function linhaEmpenho(e) {
             <td>${pctCell(e.percentual_liquidado)}</td>
             <td class="acoes">
                 <button class="btn btn-sm btn-secondary" onclick="abrirDetalhe(${e.id})">Abrir</button>
-                <button class="btn btn-sm btn-danger" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" onclick="apagarEmpenho(${e.id})">🗑</button>
+                <button class="btn btn-sm btn-danger" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" onclick="apagarEmpenho(${e.id})">${ico('trash')}</button>
             </td>
         </tr>`;
 }
@@ -140,7 +144,7 @@ function linhaFornecedor(nome, lista, fechado) {
                 <span class="grupo-seta" aria-hidden="true">▾</span>
                 <strong>${esc(nome)}</strong>
                 <span class="grupo-qtd">${fmtNum(lista.length)} empenho${lista.length > 1 ? 's' : ''}</span>
-                ${atrasos ? `<span class="badge critico">⏰ ${fmtNum(atrasos)}</span>` : ''}
+                ${atrasos ? `<span class="badge critico">${ico('alarm')} ${fmtNum(atrasos)}</span>` : ''}
             </td>
             <td class="num money">${fmtMoney(emp)}</td>
             <td class="num money text-teal">${fmtMoney(liq)}</td>
@@ -161,11 +165,11 @@ function renderLista() {
         ? `${fmtNum(todos.length)} empenho${todos.length === 1 ? '' : 's'}`
         : `${fmtNum(lista.length)} de ${fmtNum(todos.length)}`) + ` · ${fmtNum(nForn)} fornecedor${nForn === 1 ? '' : 'es'}`;
     if (!todos.length) {
-        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">📦</span>Nenhum empenho cadastrado ainda.<br>Clique em "＋ Novo Empenho" para começar.</td></tr>`;
+        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">${ico('inbox', 'ico ico-empty')}</span>Nenhum empenho cadastrado ainda.<br>Clique em "Novo Empenho" para começar.</td></tr>`;
         return;
     }
     if (!lista.length) {
-        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">🔎</span>Nenhum empenho encontrado com esses filtros.</td></tr>`;
+        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">${ico('search', 'ico ico-empty')}</span>Nenhum empenho encontrado com esses filtros.</td></tr>`;
         return;
     }
     if (!agrupar) { $('tbodyEmpenhos').innerHTML = lista.map(linhaEmpenho).join(''); return; }
@@ -302,11 +306,11 @@ function renderItens() {
             <td class="num money text-teal">${fmtMoney(i.liquidado)}</td>
             <td>${pctCell(i.percentual_liquidado)}</td>
             <td class="acoes">
-                <button class="btn btn-sm btn-secondary" title="Editar item" aria-label="Editar item" onclick="editarItem(${i.id})">✏️</button>
-                <button class="btn btn-sm btn-secondary" title="Reforço ou anulação de quantidade" aria-label="Reforço ou anulação" onclick="abrirMovimento(${i.id})">±</button>
-                <button class="btn btn-sm btn-danger" title="Excluir item" aria-label="Excluir item" onclick="excluirItem(${i.id})">🗑</button>
+                <button class="btn btn-sm btn-secondary" title="Editar item" aria-label="Editar item" onclick="editarItem(${i.id})">${ico('pencil')}</button>
+                <button class="btn btn-sm btn-secondary" title="Reforço ou anulação de quantidade" aria-label="Reforço ou anulação" onclick="abrirMovimento(${i.id})">${ico('plus-minus')}</button>
+                <button class="btn btn-sm btn-danger" title="Excluir item" aria-label="Excluir item" onclick="excluirItem(${i.id})">${ico('trash')}</button>
             </td>
-        </tr>`).join('') : `<tr><td colspan="12" class="empty"><span class="empty-icon">📄</span>Nenhum item. Clique em "＋ Itens".</td></tr>`;
+        </tr>`).join('') : `<tr><td colspan="12" class="empty"><span class="empty-icon">${ico('file-text', 'ico ico-empty')}</span>Nenhum item. Clique em "Itens".</td></tr>`;
     $('btnNovoPedido').disabled = !estado.itens.some(i => i.saldo_a_pedir > EPS);
     $('btnNovoPedido').title = $('btnNovoPedido').disabled ? 'Nenhum item com saldo a pedir' : '';
 }
@@ -321,7 +325,7 @@ function renderMovimentos() {
                 <tbody>${movs.map(m => `
                     <tr>
                         <td>${dataBR(m.data)}</td>
-                        <td><span class="badge ${m.tipo === 'REFORCO' ? 'ok' : 'critico'}">${m.tipo === 'REFORCO' ? '＋ Reforço' : '− Anulação'}</span></td>
+                        <td><span class="badge ${m.tipo === 'REFORCO' ? 'ok' : 'critico'}">${m.tipo === 'REFORCO' ? 'Reforço (+)' : 'Anulação (−)'}</span></td>
                         <td>${esc(m.numero_item)} • ${esc(m.descricao)}</td>
                         <td class="num">${fmtNum(m.qtde)} ${esc(m.und)}</td>
                         <td>${esc(m.documento)}</td>
@@ -342,7 +346,7 @@ function renderPedidos() {
         const [rot, cls] = STATUS[p.status] || [p.status, 'info'];
         const aberto = p.status === 'INCLUIDO' || p.status === 'PARCIAL';
         const venc = p.vencimento
-            ? `${dataBR(p.vencimento)}${p.dias_atraso ? `<div><span class="badge critico">⏰ ${p.dias_atraso} dia${p.dias_atraso > 1 ? 's' : ''} de atraso</span></div>` : ''}`
+            ? `${dataBR(p.vencimento)}${p.dias_atraso ? `<div><span class="badge critico">${ico('alarm')} ${p.dias_atraso} dia${p.dias_atraso > 1 ? 's' : ''} de atraso</span></div>` : ''}`
             : '<span class="muted">—</span>';
         return `<tr class="${p.dias_atraso ? 'row-alerta' : ''}">
             <td><strong>${esc(p.numero_pedido)}</strong>${p.observacoes ? `<div class="muted small">${esc(p.observacoes)}</div>` : ''}</td>
@@ -353,18 +357,18 @@ function renderPedidos() {
             <td class="num">${fmtNum(p.qtde_total_recebida)}</td>
             <td><span class="badge ${cls}">${rot}</span></td>
             <td class="acoes">
-                ${aberto ? `<button class="btn btn-sm btn-primary" onclick="abrirRecebimento(${p.id})">📥 Receber</button>` : ''}
-                <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">📄</button>
+                ${aberto ? `<button class="btn btn-sm btn-primary" onclick="abrirRecebimento(${p.id})">${ico('package-import')} Receber</button>` : ''}
+                <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">${ico('file-type-pdf')}</button>
                 ${p.qt_nfs > 0 ? `<button class="btn btn-sm ${p.qt_nfs_a_pagar ? 'btn-attention' : 'btn-secondary'}" onclick="verNfs(${p.id})"
                     title="${p.qt_nfs_a_pagar ? `${p.qt_nfs_a_pagar} NF(s) aguardando pagamento — clique para marcar como paga` : 'Todas as NFs pagas'}"
-                    aria-label="Notas fiscais">🧾 NFs ${p.qt_nfs_a_pagar ? `<span class="pill">${p.qt_nfs_a_pagar} a pagar</span>` : '<span class="pill ok" title="Todas as NFs pagas">✓</span>'}</button>` : ''}
-                <button class="btn btn-sm btn-secondary" onclick="editarPedido(${p.id})" title="Editar pedido" aria-label="Editar pedido">✏️</button>
-                ${p.status === 'PARCIAL' || p.status === 'INCLUIDO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, false)" title="Encerrar: o que falta não virá e volta ao saldo a pedir" aria-label="Encerrar pedido">🔒</button>` : ''}
-                ${p.status === 'ENCERRADO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, true)" title="Reabrir pedido" aria-label="Reabrir pedido">🔓</button>` : ''}
-                <button class="btn btn-sm btn-danger" title="Excluir pedido" aria-label="Excluir pedido" onclick="excluirPedido(${p.id})">🗑</button>
+                    aria-label="Notas fiscais">${ico('file-invoice')} NFs ${p.qt_nfs_a_pagar ? `<span class="pill">${p.qt_nfs_a_pagar} a pagar</span>` : `<span class="pill ok" title="Todas as NFs pagas">${ico('check', 'ico ico-xs')}</span>`}</button>` : ''}
+                <button class="btn btn-sm btn-secondary" onclick="editarPedido(${p.id})" title="Editar pedido" aria-label="Editar pedido">${ico('pencil')}</button>
+                ${p.status === 'PARCIAL' || p.status === 'INCLUIDO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, false)" title="Encerrar: o que falta não virá e volta ao saldo a pedir" aria-label="Encerrar pedido">${ico('lock')}</button>` : ''}
+                ${p.status === 'ENCERRADO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, true)" title="Reabrir pedido" aria-label="Reabrir pedido">${ico('lock-open')}</button>` : ''}
+                <button class="btn btn-sm btn-danger" title="Excluir pedido" aria-label="Excluir pedido" onclick="excluirPedido(${p.id})">${ico('trash')}</button>
             </td>
         </tr>`;
-    }).join('') : `<tr><td colspan="8" class="empty"><span class="empty-icon">🧾</span>Nenhum pedido. Clique em "＋ Fazer Pedido".</td></tr>`;
+    }).join('') : `<tr><td colspan="8" class="empty"><span class="empty-icon">${ico('file-invoice', 'ico ico-empty')}</span>Nenhum pedido. Clique em "Fazer Pedido".</td></tr>`;
 }
 
 /** OBs lançadas antes de o pagamento passar a ser marcado na NF: só aviso + exclusão. */
@@ -377,7 +381,7 @@ function renderObsAntigas() {
             <div><strong>OBs lançadas no modo antigo (${fmtMoney(total)})</strong>
             <div class="muted small">Elas não entram mais no "Pago". Marque as NFs correspondentes como pagas e depois exclua estes lançamentos.</div></div>
             <ul>${obs.map(o => `<li><span>OB <strong>${esc(o.ob)}</strong> · ${dataBR(o.data_pagamento)} · ${fmtMoney(o.valor)}${o.nf ? ` · NF ${esc(o.nf)}` : ''}</span>
-                <button class="btn btn-sm btn-danger" onclick="excluirObAntiga(${o.id})" aria-label="Excluir OB ${esc(o.ob)}">🗑</button></li>`).join('')}</ul>
+                <button class="btn btn-sm btn-danger" onclick="excluirObAntiga(${o.id})" aria-label="Excluir OB ${esc(o.ob)}">${ico('trash')}</button></li>`).join('')}</ul>
         </div>`;
 }
 
@@ -389,15 +393,15 @@ async function excluirObAntiga(id) {
 
 // ---------- Histórico do empenho ----------
 const ACOES = {
-    CRIAR: '🆕', EDITAR: '✏️', EXCLUIR: '🗑', RESTAURAR: '♻️', RECEBER: '📥', PAGAR: '💰',
-    ENCERRAR: '🔒', REFORCO: '➕', ANULACAO: '➖', LOGIN: '🔑', EXPORTAR: '⬇',
+    CRIAR: 'plus', EDITAR: 'pencil', EXCLUIR: 'trash', RESTAURAR: 'restore', RECEBER: 'package-import', PAGAR: 'cash',
+    DESFAZER: 'arrow-back-up', ENCERRAR: 'lock', REFORCO: 'plus', ANULACAO: 'plus-minus', LOGIN: 'key', EXPORTAR: 'download',
 };
 async function carregarHistorico() {
     $('listaHistorico').innerHTML = '<li class="muted">Carregando…</li>';
     try {
         const h = await fetchJSON(`/api/historico?empenho_id=${estado.empenhoId}&limite=100`);
         $('listaHistorico').innerHTML = h.length ? h.map(x => `
-            <li><span class="tl-ico">${ACOES[x.acao] || '•'}</span>
+            <li><span class="tl-ico">${ico(ACOES[x.acao] || 'history')}</span>
                 <div><div>${esc(x.descricao)}</div>
                 <div class="muted small">${dataBR(x.quando)} · ${esc(x.usuario)}</div></div></li>`).join('')
             : '<li class="muted">Nenhum registro.</li>';
@@ -416,7 +420,7 @@ function criarLinha(id = null, numero_item = '', descricao = '', und = '', qtde 
         <td><input class="inp-item" data-f="und" value="${esc(und)}" placeholder="CX" aria-label="Unidade"></td>
         <td><input class="inp-item num-input" data-f="qtde_empenhada" value="${esc(qtde)}" inputmode="decimal" aria-label="Quantidade"></td>
         <td><input class="inp-item num-input" data-f="valor_unitario" value="${esc(vunit)}" inputmode="decimal" aria-label="Valor unitário"></td>
-        <td><button class="btn btn-sm btn-danger" type="button" aria-label="Remover linha" onclick="removerLinha(this)">✕</button></td>`;
+        <td><button class="btn btn-sm btn-danger" type="button" aria-label="Remover linha" onclick="removerLinha(this)">${ico('x')}</button></td>`;
     tr.querySelectorAll('.num-input').forEach(inp => inp.addEventListener('input', recalcularTotalItens));
     $('tbodyItemEdit').appendChild(tr);
     recalcularTotalItens();
@@ -510,7 +514,7 @@ function importarTexto(texto) {
 function executarImportacao(texto) {
     const r = importarTexto(texto);
     $('importMsg').textContent = r.ok
-        ? `✓ ${r.ok} item(ns) adicionado(s) à lista${r.ignoradas ? `, ${r.ignoradas} linha(s) ignorada(s)` : ''}. Confira e salve.`
+        ? `${r.ok} item(ns) adicionado(s) à lista${r.ignoradas ? `, ${r.ignoradas} linha(s) ignorada(s)` : ''}. Confira e salve.`
         : 'Nenhuma linha reconhecida. Use as colunas: Item, Descrição, Und, Qtde, Valor unit.';
     if (r.ok) $('txtImportar').value = '';
 }
@@ -698,24 +702,24 @@ async function verNfs(id) {
     const aPagar = d.recebimentos.filter(n => !n.pago_em);
     $('nfsTitulo').innerHTML = `Notas Fiscais ${aPagar.length
         ? `<span class="badge atencao">${aPagar.length} a pagar · ${fmtMoney(aPagar.reduce((a, n) => a + n.valor, 0))}</span>`
-        : (d.recebimentos.length ? '<span class="badge ok">✓ todas pagas</span>' : '')}`;
+        : (d.recebimentos.length ? `<span class="badge ok">${ico('circle-check')} todas pagas</span>` : '')}`;
     $('nfCorpo').innerHTML = d.recebimentos.length ? d.recebimentos.map((nf, idx) => `
         <div class="nf-card ${nf.pago_em ? 'nf-paga' : ''}">
             <div class="nf-head">
-                <span style="font-size:18px">🧾</span>
+                <span class="nf-ico">${ico('file-invoice', 'ico ico-lg')}</span>
                 <div class="nf-title">
                     <strong>NF ${esc(nf.nf)}</strong>
                     <span class="muted"> • ${dataBR(nf.data_recebimento) || '—'} • ${fmtMoney(nf.valor)}</span>
                     <div class="nf-status">${nf.pago_em
-                        ? `<span class="badge ok">✓ Paga em ${dataBR(nf.pago_em).slice(0, 10)}</span> <span class="muted small">por ${esc(nf.pago_por || '—')}</span>`
-                        : '<span class="badge atencao">⏳ Aguardando pagamento</span>'}</div>
+                        ? `<span class="badge ok">${ico('circle-check')} Paga em ${dataBR(nf.pago_em).slice(0, 10)}</span> <span class="muted small">por ${esc(nf.pago_por || '—')}</span>`
+                        : `<span class="badge atencao">${ico('hourglass')} Aguardando pagamento</span>`}</div>
                 </div>
                 <div class="nf-acoes">
                     ${nf.pago_em
-                        ? `<button class="btn btn-sm btn-secondary" onclick="pagarNf(${idx}, false)" title="Desmarcar o pagamento desta NF">↩ Desfazer</button>`
-                        : `<button class="btn btn-sm btn-success" onclick="pagarNf(${idx}, true)">✓ Marcar como paga</button>`}
-                    <button class="btn btn-sm btn-secondary" onclick="abrirCorrecaoNf(${idx})" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para corrigir"' : ''}>✏️ Corrigir</button>
-                    <button class="btn btn-sm btn-danger" onclick="excluirNf(${idx})" aria-label="Excluir NF" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para excluir"' : ''}>🗑</button>
+                        ? `<button class="btn btn-sm btn-secondary" onclick="pagarNf(${idx}, false)" title="Desmarcar o pagamento desta NF">${ico('arrow-back-up')} Desfazer</button>`
+                        : `<button class="btn btn-sm btn-success" onclick="pagarNf(${idx}, true)">${ico('check')} Marcar como paga</button>`}
+                    <button class="btn btn-sm btn-secondary" onclick="abrirCorrecaoNf(${idx})" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para corrigir"' : ''}>${ico('pencil')} Corrigir</button>
+                    <button class="btn btn-sm btn-danger" onclick="excluirNf(${idx})" aria-label="Excluir NF" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para excluir"' : ''}>${ico('trash')}</button>
                 </div>
             </div>
             ${nf.observacoes ? `<div class="muted small">Obs.: ${esc(nf.observacoes)}</div>` : ''}
@@ -852,6 +856,11 @@ function rotaAtual() {
         abrirDetalhe(id, { pushUrl: false });
         fetchJSON('/api/stats_empenhos').then(renderKpis).catch(err => toast(err.message, 'error'));
     } else {
+        const sit = new URLSearchParams(location.search).get('situacao');
+        if (sit && [...$('fSituacao').options].some(o => o.value === sit)) {
+            $('fSituacao').value = sit;
+            history.replaceState({}, '', '/empenhos'); // o filtro fica aplicado, a URL fica limpa
+        }
         voltarLista({ pushUrl: false });
     }
 }

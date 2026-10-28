@@ -4,7 +4,7 @@
         {% if logo_img %}
         <img class="logo-img" src="{{ url_for('static', filename=logo_img) }}" alt="{{ logo_alt or '' }}" width="78" height="40">
         {% else %}
-        <span class="logo">{{ icone }}</span>
+        <span class="logo">{{ ico(icone_nome or 'receipt', 'ico ico-logo') }}</span>
         {% endif %}
         <div>
             <h1>{{ titulo }}</h1>
@@ -24,5 +24,5 @@
     </nav>
 </header>
 {% if not auth_ativa %}
-<div class="banner-aviso">⚠️ Modo local sem senha. Para exigir login, defina a variável <code>APP_PASSWORD</code>.</div>
+<div class="banner-aviso">{{ ico('alert-triangle') }} Modo local sem senha. Para exigir login, defina a variável <code>APP_PASSWORD</code>.</div>
 {% endif %}

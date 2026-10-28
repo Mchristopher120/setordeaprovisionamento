@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from '_icones.html' import icone as ico %}<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
@@ -12,7 +12,7 @@
     <script src="{{ url_for('static', filename='tema.js') }}"></script>
 </head>
 <body>
-    {% set pagina = 'empenhos' %}{% set icone = '📦' %}{% set titulo = 'Empenhos, Pedidos & Recebimentos' %}{% set subtitulo = 'Cadastro por item • Liquidação e pagamento por NF' %}
+    {% set pagina = 'empenhos' %}{% set icone_nome = 'receipt' %}{% set titulo = 'Empenhos, Pedidos & Recebimentos' %}{% set subtitulo = 'Cadastro por item • Liquidação e pagamento por NF' %}
     {% include '_topbar.html' %}
 
     <main class="container">
@@ -22,7 +22,7 @@
         <section class="card table-card" id="secLista">
             <div class="table-head">
                 <h3>Empenhos <span class="count-badge" id="countBadge">0 empenhos</span></h3>
-                <button id="btnNew" class="btn btn-primary">＋ Novo Empenho</button>
+                <button id="btnNew" class="btn btn-primary">{{ ico('plus') }} Novo Empenho</button>
             </div>
             <div class="toolbar" role="search">
                 <input type="search" id="fBusca" class="input" placeholder="Buscar por NE, fornecedor ou processo…" aria-label="Buscar">
@@ -32,6 +32,8 @@
                     <option value="CONCLUIDO">Concluídos</option>
                     <option value="SEM_ITENS">Sem itens</option>
                     <option value="ATRASO">Com pedido atrasado</option>
+                    <option value="VENCENDO">Com pedido vencendo em 7 dias</option>
+                    <option value="APAGAR">Com NF a pagar</option>
                 </select>
                 <select id="fFornecedor" class="input" aria-label="Fornecedor"><option value="">Todos os fornecedores</option></select>
                 <select id="fAno" class="input" aria-label="Ano"><option value="">Todos os anos</option></select>
@@ -63,15 +65,15 @@
         <section class="card" id="secDetalhe" style="display:none">
             <div class="detail-head">
                 <div>
-                    <button id="btnVoltar" class="btn btn-link">← Voltar para a lista</button>
+                    <button id="btnVoltar" class="btn btn-link">{{ ico('arrow-left') }} Voltar para a lista</button>
                     <h3 id="detTitulo">Detalhe do Empenho</h3>
                     <div id="detResumo" class="chips"></div>
                 </div>
                 <div class="detail-actions">
-                    <button id="btnEditarEmpenho" class="btn btn-secondary">✏️ Editar</button>
-                    <button id="btnExcluirEmpenho" class="btn btn-danger">🗑 Apagar</button>
-                    <button id="btnAddItem" class="btn btn-secondary">＋ Itens</button>
-                    <button id="btnNovoPedido" class="btn btn-primary">＋ Fazer Pedido</button>
+                    <button id="btnEditarEmpenho" class="btn btn-secondary">{{ ico('pencil') }} Editar</button>
+                    <button id="btnExcluirEmpenho" class="btn btn-danger">{{ ico('trash') }} Apagar</button>
+                    <button id="btnAddItem" class="btn btn-secondary">{{ ico('plus') }} Itens</button>
+                    <button id="btnNovoPedido" class="btn btn-primary">{{ ico('plus') }} Fazer Pedido</button>
                 </div>
             </div>
 
@@ -120,11 +122,11 @@
                 </table>
             </div>
 
-            <p class="hint mt-small">💰 O pagamento é marcado em cada NF: clique em <strong>🧾 NFs</strong> no pedido e use <strong>✓ Marcar como paga</strong>.</p>
+            <p class="hint mt-small hint-ico">{{ ico('cash') }} O pagamento é marcado em cada NF: clique em <strong>NFs</strong> no pedido e use <strong>Marcar como paga</strong>.</p>
             <div id="secObsAntigas"></div>
 
             <details class="historico-box mt-section" id="boxHistorico">
-                <summary>🕘 Histórico deste empenho</summary>
+                <summary>{{ ico('history') }} Histórico deste empenho</summary>
                 <ul class="timeline" id="listaHistorico"></ul>
             </details>
         </section>
@@ -156,12 +158,12 @@
             <div class="modal-body">
                 <div id="boxImportar" class="import-box">
                     <div class="import-head">
-                        <strong>📋 Importar da planilha</strong>
+                        <strong>{{ ico('clipboard-list') }} Importar da planilha</strong>
                         <span class="muted">Copie as linhas no Excel (Item, Descrição, Und, Qtde, Valor unit.) e cole abaixo, ou escolha um arquivo .csv.</span>
                     </div>
                     <textarea id="txtImportar" rows="3" placeholder="Cole aqui as linhas copiadas do Excel…"></textarea>
                     <div class="import-actions">
-                        <label class="btn btn-secondary btn-sm file-btn">📄 Arquivo .csv<input type="file" id="fileImportar" accept=".csv,.txt" hidden></label>
+                        <label class="btn btn-secondary btn-sm file-btn">{{ ico('file-upload') }} Arquivo .csv<input type="file" id="fileImportar" accept=".csv,.txt" hidden></label>
                         <button id="btnImportar" type="button" class="btn btn-secondary btn-sm">Adicionar à lista</button>
                         <span id="importMsg" class="muted small"></span>
                     </div>
@@ -181,7 +183,7 @@
                         <tbody id="tbodyItemEdit"></tbody>
                     </table>
                 </div>
-                <button id="btnAddLinha" class="btn btn-secondary btn-sm" style="align-self:flex-start">＋ Adicionar linha</button>
+                <button id="btnAddLinha" class="btn btn-secondary btn-sm" style="align-self:flex-start">{{ ico('plus') }} Adicionar linha</button>
                 <div id="itemTotalBox" class="item-total">Total: <strong id="itemTotal">R$ 0,00</strong></div>
                 <p class="muted small" id="itemEditHint">Preencha cada linha e clique em Salvar. Linhas em branco são ignoradas.</p>
             </div>
@@ -199,8 +201,8 @@
             <div class="modal-body">
                 <p class="muted" id="movInfo"></p>
                 <div class="seg" role="radiogroup" aria-label="Tipo de movimento">
-                    <label><input type="radio" name="movTipo" value="REFORCO" checked> ＋ Reforço</label>
-                    <label><input type="radio" name="movTipo" value="ANULACAO"> − Anulação</label>
+                    <label><input type="radio" name="movTipo" value="REFORCO" checked> Reforço (+)</label>
+                    <label><input type="radio" name="movTipo" value="ANULACAO"> Anulação (−)</label>
                 </div>
                 <label for="movQtde">Quantidade *</label>
                 <input type="text" id="movQtde" inputmode="decimal" placeholder="ex: 50">
@@ -294,6 +296,7 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+    <script src="{{ url_for('static', filename='icones.js') }}"></script>
     <script src="{{ url_for('static', filename='ui.js') }}"></script>
     <script src="{{ url_for('static', filename='empenhos.js') }}"></script>
 </body>

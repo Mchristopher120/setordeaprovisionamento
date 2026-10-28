@@ -12,8 +12,8 @@ async function loadAll({ aviso = false } = {}) {
         ]);
         erroBox.hidden = true;
         estadoDash.empenhos = empenhos;
+        renderAtencao(stats);
         renderKPIs(stats);
-        renderIndicadores(stats);
         renderGraficos(stats, empenhos, evolucao);
         renderTable();
         if (aviso) showToast('Dados atualizados', 'success');
@@ -22,7 +22,7 @@ async function loadAll({ aviso = false } = {}) {
         erroBox.hidden = false;
         if (!estadoDash.empenhos.length) {
             document.getElementById('kpis').innerHTML = '';
-            document.getElementById('indGrid').innerHTML = '';
+            document.getElementById('atencao').innerHTML = '';
             document.getElementById('tableBody').innerHTML =
                 `<tr><td colspan="8" class="empty">Dados indisponíveis no momento.</td></tr>`;
             ['chartStatus', 'chartAtrasados', 'chartCredores', 'chartEvolucao', 'chartEmpenhos'].forEach(id =>
@@ -33,39 +33,51 @@ async function loadAll({ aviso = false } = {}) {
 
 function renderCarregando() {
     document.getElementById('kpis').innerHTML = Array(6).fill('<div class="kpi skeleton"></div>').join('');
-    document.getElementById('indGrid').innerHTML = Array(4).fill('<div class="ind-card skeleton"></div>').join('');
     document.getElementById('tableBody').innerHTML = linhaCarregando(8);
+}
+
+/** Barra de progresso dentro do card. */
+function barraKpi(valor, cor, rotulo) {
+    const p = Math.min(100, Math.max(0, parseFloat(valor) || 0));
+    return `<div class="kpi-bar" role="progressbar" aria-label="${escapeHTML(rotulo)}" aria-valuenow="${Math.round(p)}" aria-valuemin="0" aria-valuemax="100">
+        <span style="width:${p}%;background:${cor}"></span></div>`;
 }
 
 function renderKPIs(s) {
     const atraso = s.pedidos_atrasados
         ? `<span class="text-red"><strong>${fmtNum(s.pedidos_atrasados)}</strong> atrasado${s.pedidos_atrasados > 1 ? 's' : ''}</span>`
         : 'nenhum atrasado';
+    const pagoSobreLiq = s.valor_liquidado ? s.valor_pago / s.valor_liquidado * 100 : 0;
     document.getElementById('kpis').innerHTML = `
         <div class="kpi accent">
             <div class="kpi-label">Empenhos</div>
             <div class="kpi-value">${fmtNum(s.empenhos)}</div>
-            <div class="kpi-sub">${fmtNum(s.empenhos_concluidos)} concluídos · ${fmtNum(s.itens)} itens</div>
+            <div class="kpi-sub">${fmtNum(s.empenhos_concluidos)} concluídos (${pct(s.percentual_concluidos)})</div>
+            ${barraKpi(s.percentual_concluidos, 'var(--primary)', 'Empenhos concluídos')}
         </div>
         <div class="kpi slate">
             <div class="kpi-label">Empenhado</div>
             <div class="kpi-value">${fmtMoney(s.valor_empenhado)}</div>
-            <div class="kpi-sub">Valor total dos itens</div>
+            <div class="kpi-sub">Entrega física ${pct(s.percentual_fisico)} · ${fmtNum(s.itens)} itens</div>
+            ${barraKpi(s.percentual_fisico, 'var(--kpi-slate)', 'Entrega física dos itens')}
         </div>
         <div class="kpi teal">
             <div class="kpi-label">Liquidado</div>
             <div class="kpi-value">${fmtMoney(s.valor_liquidado)}</div>
             <div class="kpi-sub">${pct(s.percentual_liquidado)} · a liquidar ${fmtMoneyCurto(s.valor_a_liquidar)}</div>
+            ${barraKpi(s.percentual_liquidado, 'var(--liq-strong)', 'Percentual liquidado')}
         </div>
         <div class="kpi green">
             <div class="kpi-label">Pago</div>
             <div class="kpi-value">${fmtMoney(s.valor_pago)}</div>
             <div class="kpi-sub">${pct(s.percentual_pago)} do empenhado</div>
+            ${barraKpi(s.percentual_pago, 'var(--green)', 'Percentual pago')}
         </div>
         <div class="kpi red">
             <div class="kpi-label">A Pagar</div>
             <div class="kpi-value">${fmtMoney(s.valor_a_pagar)}</div>
-            <div class="kpi-sub">NFs recebidas ainda não pagas</div>
+            <div class="kpi-sub">${fmtNum(s.nfs_a_pagar)} NF${s.nfs_a_pagar === 1 ? '' : 's'} aguardando pagamento</div>
+            ${barraKpi(pagoSobreLiq, 'var(--green)', 'Parte do liquidado já paga')}
         </div>
         <div class="kpi amber">
             <div class="kpi-label">Pedidos em Aberto</div>
@@ -77,32 +89,24 @@ function renderKPIs(s) {
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => ajustarValores(document.getElementById('kpis')));
 }
 
-function renderIndicadores(s) {
-    const ind = [
-        { label: 'Liquidado', pct: s.percentual_liquidado, color: 'var(--liq-strong)', icone: '🧾',
-          detail: `${fmtMoney(s.valor_liquidado)} de ${fmtMoney(s.valor_empenhado)}` },
-        { label: 'Pago', pct: s.percentual_pago, color: 'var(--green)', icone: '💰',
-          detail: `${fmtMoney(s.valor_pago)} de ${fmtMoney(s.valor_empenhado)}` },
-        { label: 'Recebido (Físico)', pct: s.percentual_fisico, color: 'var(--primary)', icone: '📦',
-          detail: `Média de entrega de ${fmtNum(s.itens_com_qtde)} itens · ${fmtNum(s.itens_zerados)} completos` },
-        { label: 'Empenhos Concluídos', pct: s.percentual_concluidos, color: 'var(--amber)', icone: '🏁',
-          detail: `${fmtNum(s.empenhos_concluidos)} de ${fmtNum(s.empenhos)} empenhos` },
-    ];
-    document.getElementById('indGrid').innerHTML = ind.map(i => {
-        const p = Math.min(100, Math.max(0, i.pct || 0));
-        return `
-        <div class="ind-card">
-            <div class="ind-head">
-                <span class="ind-icon">${i.icone}</span>
-                <span class="ind-label">${escapeHTML(i.label)}</span>
-            </div>
-            <div class="ind-value" style="color:${i.color}">${pct(i.pct)}</div>
-            <div class="ind-bar" role="progressbar" aria-valuenow="${p}" aria-valuemin="0" aria-valuemax="100">
-                <span style="width:${p}%;background:${i.color}"></span>
-            </div>
-            <div class="ind-detail">${escapeHTML(i.detail)}</div>
-        </div>`;
-    }).join('');
+/** Faixa "Precisa de atenção": o que pede ação hoje, com atalho para a lista já filtrada. */
+function renderAtencao(s) {
+    const itens = [];
+    if (s.pedidos_atrasados) itens.push({ icone: 'alarm', cls: 'critico', filtro: 'ATRASO',
+        texto: `<strong>${fmtNum(s.pedidos_atrasados)}</strong> pedido${s.pedidos_atrasados > 1 ? 's' : ''} atrasado${s.pedidos_atrasados > 1 ? 's' : ''}` });
+    if (s.pedidos_vencendo) itens.push({ icone: 'calendar-due', cls: 'aviso', filtro: 'VENCENDO',
+        texto: `<strong>${fmtNum(s.pedidos_vencendo)}</strong> pedido${s.pedidos_vencendo > 1 ? 's vencem' : ' vence'} em até 7 dias` });
+    if (s.nfs_a_pagar) itens.push({ icone: 'cash', cls: 'info', filtro: 'APAGAR',
+        texto: `<strong>${fmtNum(s.nfs_a_pagar)}</strong> NF${s.nfs_a_pagar > 1 ? 's' : ''} aguardando pagamento · ${fmtMoney(s.valor_a_pagar)}` });
+    const el = document.getElementById('atencao');
+    if (!itens.length) {
+        el.innerHTML = s.empenhos
+            ? `<div class="atencao-ok">${ico('circle-check')} Tudo em dia: nenhum pedido atrasado ou vencendo e nenhuma NF a pagar.</div>`
+            : '';
+        return;
+    }
+    el.innerHTML = `<span class="atencao-titulo">${ico('bell')} Precisa de atenção</span>` + itens.map(i => `
+        <a class="atencao-item ${i.cls}" href="/empenhos?situacao=${i.filtro}">${ico(i.icone)}<span>${i.texto}</span>${ico('arrow-left', 'ico ico-seta')}</a>`).join('');
 }
 
 function renderGraficos(stats, empenhos, evolucao) {
@@ -132,7 +136,7 @@ function renderGraficos(stats, empenhos, evolucao) {
             sub: `${fmtNum(v.qtd)} empenho${v.qtd > 1 ? 's' : ''}`,
         }));
     graficoRanking(document.getElementById('chartCredores'), credores, 'var(--red)',
-        stats.valor_empenhado > 0 ? 'Nada a liquidar. Tudo entregue! 🎉' : 'Nenhum valor empenhado ainda.');
+        stats.valor_empenhado > 0 ? 'Nada a liquidar: tudo entregue.' : 'Nenhum valor empenhado ainda.');
 
     graficoEvolucao(document.getElementById('chartEvolucao'), evolucao);
 
@@ -153,15 +157,15 @@ function renderTable() {
 
     if (!empenhos.length) {
         tbody.innerHTML = `<tr><td colspan="8" class="empty">
-            <span class="empty-icon">📦</span>
-            Nenhum empenho cadastrado. Clique em "📦 Empenhos" para começar.
+            <span class="empty-icon">${ico('inbox', 'ico ico-empty')}</span>
+            Nenhum empenho cadastrado. Clique em "Empenhos", no topo, para começar.
         </td></tr>`;
         return;
     }
     tbody.innerHTML = empenhos.map(e => `
         <tr>
             <td><strong>${escapeHTML(e.ne)}</strong>
-                ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">⏰ ${e.pedidos_atrasados}</span>` : ''}</td>
+                ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">${ico('alarm')} ${e.pedidos_atrasados}</span>` : ''}</td>
             <td>${escapeHTML(e.nome_credor)}</td>
             <td class="num money">${fmtMoney(e.valor_empenhado)}</td>
             <td class="num money text-teal">${fmtMoney(e.valor_liquidado)}</td>

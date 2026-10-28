@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from '_icones.html' import icone as ico %}<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
@@ -13,7 +13,7 @@
 </head>
 <body class="auth-body">
     <main class="auth-card">
-        <span class="auth-logo">{{ '😴' if banco_off else '⚠️' }}</span>
+        <span class="auth-logo">{{ ico('database-off' if banco_off else 'alert-triangle', 'ico ico-logo') }}</span>
         {% if banco_off %}
             <h1>O banco de dados está acordando</h1>
             <p class="muted">Ele "dorme" após alguns minutos sem uso. Aguarde uns segundos e recarregue.</p>
