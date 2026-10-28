@@ -1,6 +1,7 @@
 // Tela de Empenhos (depende de ui.js)
 const estado = {
-    empenhoId: null, empenhoAtual: null, itens: [], pedidos: [], pagamentos: [], movimentos: [], financeiro: {},
+    empenhoId: null, empenhoAtual: null, itens: [], pedidos: [], obsAntigas: [], movimentos: [], financeiro: {},
+    gruposFechados: new Set(),
     empenhos: [], pedidoAtual: null, pedidoEditando: null, nfEditando: null, itemMov: null, empenhoEditando: null,
     sortLista: { key: null, dir: 1 }, sortItens: { key: null, dir: 1 }, sortPedidos: { key: null, dir: 1 },
 };
@@ -80,16 +81,22 @@ function preencherAnos() {
     const sel = $('fAno'), atual = sel.value;
     const anos = [...new Set(estado.empenhos.map(e => e.ano).filter(Boolean))].sort().reverse();
     sel.innerHTML = '<option value="">Todos os anos</option>' + anos.map(a => `<option ${a === atual ? 'selected' : ''}>${esc(a)}</option>`).join('');
+    const sf = $('fFornecedor'), atualF = sf.value;
+    const forn = [...new Set(estado.empenhos.map(e => e.nome_credor).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    sf.innerHTML = '<option value="">Todos os fornecedores</option>' +
+        forn.map(f => `<option ${f === atualF ? 'selected' : ''}>${esc(f)}</option>`).join('');
 }
 
 function filtrar(lista) {
     const busca = normalizar($('fBusca').value.trim());
-    const sit = $('fSituacao').value, ano = $('fAno').value, saldo = $('fSaldo').checked;
-    $('btnLimparFiltros').hidden = !(busca || sit || ano || saldo);
+    const sit = $('fSituacao').value, ano = $('fAno').value, saldo = $('fSaldo').checked, forn = $('fFornecedor').value;
+    $('btnLimparFiltros').hidden = !(busca || sit || ano || saldo || forn);
     return lista.filter(e => {
         if (busca && !normalizar(`${e.ne} ${e.nome_credor} ${e.processo}`).includes(busca)) return false;
         if (sit === 'ATRASO' ? !e.pedidos_atrasados : (sit && e.situacao !== sit)) return false;
         if (ano && e.ano !== ano) return false;
+        if (forn && e.nome_credor !== forn) return false;
         if (saldo && !(e.a_liquidar > 0.005)) return false;
         return true;
     });
@@ -97,28 +104,14 @@ function filtrar(lista) {
 
 const SITUACAO = { ANDAMENTO: ['Em andamento', 'info'], CONCLUIDO: ['Concluído', 'ok'], SEM_ITENS: ['Sem itens', 'neutro'] };
 
-function renderLista() {
-    const todos = estado.empenhos;
-    const lista = ordenar(filtrar(todos), estado.sortLista.key, estado.sortLista.dir);
-    $('countBadge').textContent = lista.length === todos.length
-        ? `${fmtNum(todos.length)} empenho${todos.length === 1 ? '' : 's'}`
-        : `${fmtNum(lista.length)} de ${fmtNum(todos.length)}`;
-    if (!todos.length) {
-        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">📦</span>Nenhum empenho cadastrado ainda.<br>Clique em "＋ Novo Empenho" para começar.</td></tr>`;
-        return;
-    }
-    if (!lista.length) {
-        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">🔎</span>Nenhum empenho encontrado com esses filtros.</td></tr>`;
-        return;
-    }
-    $('tbodyEmpenhos').innerHTML = lista.map(e => {
-        const [rot, cls] = SITUACAO[e.situacao] || ['', ''];
-        return `
+function linhaEmpenho(e) {
+    const [rot, cls] = SITUACAO[e.situacao] || ['', ''];
+    return `
         <tr>
             <td class="text-left"><strong>${esc(e.ne)}</strong>
                 <div class="cell-badges"><span class="badge ${cls}">${rot}</span>
                 ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">⏰ ${e.pedidos_atrasados} atrasado${e.pedidos_atrasados > 1 ? 's' : ''}</span>` : ''}</div></td>
-            <td>${esc(e.nome_credor)}</td>
+            <td class="col-forn">${esc(e.nome_credor)}</td>
             <td>${esc(e.processo)}</td>
             <td class="num money">${fmtMoney(e.valor_empenhado)}</td>
             <td class="num money text-teal">${fmtMoney(e.valor_liquidado)}</td>
@@ -130,11 +123,75 @@ function renderLista() {
                 <button class="btn btn-sm btn-danger" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" onclick="apagarEmpenho(${e.id})">🗑</button>
             </td>
         </tr>`;
+}
+
+/** Linha-título de um fornecedor, com os totais dos empenhos dele (clique para recolher). */
+function linhaFornecedor(nome, lista, fechado) {
+    const soma = (k) => lista.reduce((a, e) => a + (e[k] || 0), 0);
+    const emp = soma('valor_empenhado'), liq = soma('valor_liquidado');
+    const atrasos = soma('pedidos_atrasados');
+    return `
+        <tr class="grupo-row ${fechado ? 'fechado' : ''}" data-grupo="${esc(nome)}" tabindex="0" aria-expanded="${!fechado}"
+            title="${fechado ? 'Mostrar' : 'Recolher'} os empenhos deste fornecedor">
+            <td colspan="2" class="text-left">
+                <span class="grupo-seta" aria-hidden="true">▾</span>
+                <strong>${esc(nome)}</strong>
+                <span class="grupo-qtd">${fmtNum(lista.length)} empenho${lista.length > 1 ? 's' : ''}</span>
+                ${atrasos ? `<span class="badge critico">⏰ ${fmtNum(atrasos)}</span>` : ''}
+            </td>
+            <td class="num money">${fmtMoney(emp)}</td>
+            <td class="num money text-teal">${fmtMoney(liq)}</td>
+            <td class="num money text-green">${fmtMoney(soma('valor_pago'))}</td>
+            <td class="num money text-red">${fmtMoney(soma('a_liquidar'))}</td>
+            <td>${pctCell(emp ? liq / emp * 100 : 0)}</td>
+            <td></td>
+        </tr>`;
+}
+
+function renderLista() {
+    const todos = estado.empenhos;
+    const lista = ordenar(filtrar(todos), estado.sortLista.key, estado.sortLista.dir);
+    const agrupar = $('fAgrupar').checked;
+    $('tblEmpenhos').classList.toggle('agrupado', agrupar);
+    const nForn = new Set(lista.map(e => e.nome_credor)).size;
+    $('countBadge').textContent = (lista.length === todos.length
+        ? `${fmtNum(todos.length)} empenho${todos.length === 1 ? '' : 's'}`
+        : `${fmtNum(lista.length)} de ${fmtNum(todos.length)}`) + ` · ${fmtNum(nForn)} fornecedor${nForn === 1 ? '' : 'es'}`;
+    if (!todos.length) {
+        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">📦</span>Nenhum empenho cadastrado ainda.<br>Clique em "＋ Novo Empenho" para começar.</td></tr>`;
+        return;
+    }
+    if (!lista.length) {
+        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">🔎</span>Nenhum empenho encontrado com esses filtros.</td></tr>`;
+        return;
+    }
+    if (!agrupar) { $('tbodyEmpenhos').innerHTML = lista.map(linhaEmpenho).join(''); return; }
+
+    // Agrupa por fornecedor (ordem alfabética); dentro do grupo vale a ordenação escolhida
+    const grupos = new Map();
+    lista.forEach(e => {
+        const k = e.nome_credor || '—';
+        if (!grupos.has(k)) grupos.set(k, []);
+        grupos.get(k).push(e);
+    });
+    const nomes = [...grupos.keys()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    $('tbodyEmpenhos').innerHTML = nomes.map(nome => {
+        const fechado = estado.gruposFechados.has(nome);
+        return linhaFornecedor(nome, grupos.get(nome), fechado) + (fechado ? '' : grupos.get(nome).map(linhaEmpenho).join(''));
     }).join('');
+    $('tbodyEmpenhos').querySelectorAll('.grupo-row').forEach(tr => {
+        const alternar = () => {
+            const g = tr.dataset.grupo;
+            if (estado.gruposFechados.has(g)) estado.gruposFechados.delete(g); else estado.gruposFechados.add(g);
+            renderLista();
+        };
+        tr.addEventListener('click', alternar);
+        tr.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); alternar(); } });
+    });
 }
 
 function limparFiltros() {
-    $('fBusca').value = ''; $('fSituacao').value = ''; $('fAno').value = ''; $('fSaldo').checked = false;
+    $('fBusca').value = ''; $('fSituacao').value = ''; $('fAno').value = ''; $('fFornecedor').value = ''; $('fSaldo').checked = false;
     renderLista();
 }
 
@@ -153,7 +210,7 @@ function abrirModalEmpenho(editar = false) {
 
 async function salvarEmpenho() {
     const corpo = { ne: $('mNe').value.trim(), processo: $('mProcesso').value.trim(), nome_credor: $('mCredor').value.trim() };
-    if (!corpo.ne || !corpo.nome_credor) { toast('Preencha NE e Credor', 'error'); return; }
+    if (!corpo.ne || !corpo.nome_credor) { toast('Preencha NE e Fornecedor', 'error'); return; }
     if (estado.empenhoEditando) {
         const d = await acao(enviarJSON(`/api/empenhos/${estado.empenhoEditando.id}`, 'PUT', corpo), 'Empenho atualizado');
         if (d) fecharModal('modalEmpenho');
@@ -189,7 +246,7 @@ async function abrirDetalhe(id, { pushUrl = true, rolar = true } = {}) {
     if (!data || !data.empenho) { toast('Empenho não encontrado', 'error'); if (!estado.empenhoId) voltarLista(); return; }
     Object.assign(estado, {
         empenhoId: id, empenhoAtual: data.empenho, itens: data.itens, pedidos: data.pedidos,
-        pagamentos: data.pagamentos, movimentos: data.movimentos, financeiro: data.financeiro,
+        obsAntigas: data.pagamentos_antigos || [], movimentos: data.movimentos, financeiro: data.financeiro,
     });
     const e = data.empenho, f = data.financeiro;
     document.title = `${e.ne} — Empenhos`;
@@ -206,7 +263,7 @@ async function abrirDetalhe(id, { pushUrl = true, rolar = true } = {}) {
     renderItens();
     renderMovimentos();
     renderPedidos();
-    renderPagamentos();
+    renderObsAntigas();
     if ($('boxHistorico').open) carregarHistorico();
     if (pushUrl && new URLSearchParams(location.search).get('id') !== String(id)) {
         history.pushState({ id }, '', `/empenhos?id=${id}`);
@@ -295,7 +352,9 @@ function renderPedidos() {
             <td class="acoes">
                 ${aberto ? `<button class="btn btn-sm btn-primary" onclick="abrirRecebimento(${p.id})">📥 Receber</button>` : ''}
                 <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">📄</button>
-                ${p.qt_recebimentos > 0 ? `<button class="btn btn-sm btn-secondary" onclick="verNfs(${p.id})" title="Ver, corrigir ou excluir NFs" aria-label="Notas fiscais">🧾 NFs</button>` : ''}
+                ${p.qt_nfs > 0 ? `<button class="btn btn-sm ${p.qt_nfs_a_pagar ? 'btn-attention' : 'btn-secondary'}" onclick="verNfs(${p.id})"
+                    title="${p.qt_nfs_a_pagar ? `${p.qt_nfs_a_pagar} NF(s) aguardando pagamento — clique para marcar como paga` : 'Todas as NFs pagas'}"
+                    aria-label="Notas fiscais">🧾 NFs ${p.qt_nfs_a_pagar ? `<span class="pill">${p.qt_nfs_a_pagar} a pagar</span>` : '<span class="pill ok" title="Todas as NFs pagas">✓</span>'}</button>` : ''}
                 <button class="btn btn-sm btn-secondary" onclick="editarPedido(${p.id})" title="Editar pedido" aria-label="Editar pedido">✏️</button>
                 ${p.status === 'PARCIAL' || p.status === 'INCLUIDO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, false)" title="Encerrar: o que falta não virá e volta ao saldo a pedir" aria-label="Encerrar pedido">🔒</button>` : ''}
                 ${p.status === 'ENCERRADO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, true)" title="Reabrir pedido" aria-label="Reabrir pedido">🔓</button>` : ''}
@@ -305,22 +364,24 @@ function renderPedidos() {
     }).join('') : `<tr><td colspan="8" class="empty"><span class="empty-icon">🧾</span>Nenhum pedido. Clique em "＋ Fazer Pedido".</td></tr>`;
 }
 
-function renderPagamentos() {
-    const f = estado.financeiro;
-    $('btnNovoPagamento').disabled = !(f.a_pagar > 0.005);
-    $('btnNovoPagamento').title = $('btnNovoPagamento').disabled ? 'Nada liquidado a pagar' : '';
-    $('tbodyPagamentos').innerHTML = estado.pagamentos.length ? estado.pagamentos.map(p => `
-        <tr>
-            <td><strong>${esc(p.ob)}</strong></td>
-            <td>${dataBR(p.data_pagamento)}</td>
-            <td class="num money text-green">${fmtMoney(p.valor)}</td>
-            <td>${esc(p.nf)}</td>
-            <td class="text-left">${esc(p.observacoes)}</td>
-            <td class="acoes"><button class="btn btn-sm btn-danger" title="Excluir pagamento" aria-label="Excluir pagamento" onclick="excluirPagamento(${p.id})">🗑</button></td>
-        </tr>`).join('') + `
-        <tr class="row-total"><td colspan="2">Total pago</td><td class="num money">${fmtMoney(f.pago)}</td>
-            <td colspan="3" class="text-left muted">A pagar: <strong class="${f.a_pagar > 0.005 ? 'text-amber' : 'text-green'}">${fmtMoney(f.a_pagar)}</strong></td></tr>`
-        : `<tr><td colspan="6" class="empty small">Nenhum pagamento registrado.${f.a_pagar > 0.005 ? ` Liquidado a pagar: <strong>${fmtMoney(f.a_pagar)}</strong>.` : ''}</td></tr>`;
+/** OBs lançadas antes de o pagamento passar a ser marcado na NF: só aviso + exclusão. */
+function renderObsAntigas() {
+    const obs = estado.obsAntigas;
+    if (!obs.length) { $('secObsAntigas').innerHTML = ''; return; }
+    const total = obs.reduce((a, o) => a + (o.valor || 0), 0);
+    $('secObsAntigas').innerHTML = `
+        <div class="aviso-legado">
+            <div><strong>OBs lançadas no modo antigo (${fmtMoney(total)})</strong>
+            <div class="muted small">Elas não entram mais no "Pago". Marque as NFs correspondentes como pagas e depois exclua estes lançamentos.</div></div>
+            <ul>${obs.map(o => `<li><span>OB <strong>${esc(o.ob)}</strong> · ${dataBR(o.data_pagamento)} · ${fmtMoney(o.valor)}${o.nf ? ` · NF ${esc(o.nf)}` : ''}</span>
+                <button class="btn btn-sm btn-danger" onclick="excluirObAntiga(${o.id})" aria-label="Excluir OB ${esc(o.ob)}">🗑</button></li>`).join('')}</ul>
+        </div>`;
+}
+
+async function excluirObAntiga(id) {
+    const o = estado.obsAntigas.find(x => x.id === id);
+    if (!confirm(`Excluir o lançamento da OB ${o ? o.ob : ''}? (vai para a lixeira)`)) return;
+    await acao(enviarJSON(`/api/pagamentos/${id}`, 'DELETE'), 'Lançamento antigo enviado para a lixeira');
 }
 
 // ---------- Histórico do empenho ----------
@@ -631,17 +692,27 @@ async function verNfs(id) {
     if (!d.ok) { toast(d.error, 'error'); return; }
     estado.pedidoAtual = d;
     $('nfPedidoInfo').innerHTML = `<strong>Pedido ${esc(d.pedido.numero_pedido)}</strong> • Empenho ${esc(d.empenho ? d.empenho.ne : '—')} • ${esc(d.empenho ? d.empenho.nome_credor : '—')}`;
+    const aPagar = d.recebimentos.filter(n => !n.pago_em);
+    $('nfsTitulo').innerHTML = `Notas Fiscais ${aPagar.length
+        ? `<span class="badge atencao">${aPagar.length} a pagar · ${fmtMoney(aPagar.reduce((a, n) => a + n.valor, 0))}</span>`
+        : (d.recebimentos.length ? '<span class="badge ok">✓ todas pagas</span>' : '')}`;
     $('nfCorpo').innerHTML = d.recebimentos.length ? d.recebimentos.map((nf, idx) => `
-        <div class="nf-card">
+        <div class="nf-card ${nf.pago_em ? 'nf-paga' : ''}">
             <div class="nf-head">
                 <span style="font-size:18px">🧾</span>
                 <div class="nf-title">
                     <strong>NF ${esc(nf.nf)}</strong>
-                    <span class="muted"> • ${dataBR(nf.data_recebimento) || '—'} • liquidado ${fmtMoney(nf.valor)}</span>
+                    <span class="muted"> • ${dataBR(nf.data_recebimento) || '—'} • ${fmtMoney(nf.valor)}</span>
+                    <div class="nf-status">${nf.pago_em
+                        ? `<span class="badge ok">✓ Paga em ${dataBR(nf.pago_em).slice(0, 10)}</span> <span class="muted small">por ${esc(nf.pago_por || '—')}</span>`
+                        : '<span class="badge atencao">⏳ Aguardando pagamento</span>'}</div>
                 </div>
                 <div class="nf-acoes">
-                    <button class="btn btn-sm btn-secondary" onclick="abrirCorrecaoNf(${idx})">✏️ Corrigir</button>
-                    <button class="btn btn-sm btn-danger" onclick="excluirNf(${idx})" aria-label="Excluir NF">🗑</button>
+                    ${nf.pago_em
+                        ? `<button class="btn btn-sm btn-secondary" onclick="pagarNf(${idx}, false)" title="Desmarcar o pagamento desta NF">↩ Desfazer</button>`
+                        : `<button class="btn btn-sm btn-success" onclick="pagarNf(${idx}, true)">✓ Marcar como paga</button>`}
+                    <button class="btn btn-sm btn-secondary" onclick="abrirCorrecaoNf(${idx})" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para corrigir"' : ''}>✏️ Corrigir</button>
+                    <button class="btn btn-sm btn-danger" onclick="excluirNf(${idx})" aria-label="Excluir NF" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para excluir"' : ''}>🗑</button>
                 </div>
             </div>
             ${nf.observacoes ? `<div class="muted small">Obs.: ${esc(nf.observacoes)}</div>` : ''}
@@ -750,6 +821,14 @@ async function salvarRecebimento() {
     if (r) fecharModal('modalReceber');
 }
 
+async function pagarNf(idx, pago) {
+    const d = estado.pedidoAtual, nf = d.recebimentos[idx];
+    if (!pago && !confirm(`Desfazer o pagamento da NF ${nf.nf} (${fmtMoney(nf.valor)})?`)) return;
+    const r = await acao(enviarJSON(`/api/pedidos/${d.pedido.id}/nfs/pagar`, 'POST', { ids: nf.ids, pago }),
+        pago ? `NF ${nf.nf} marcada como paga — ${fmtMoney(nf.valor)}` : `Pagamento da NF ${nf.nf} desfeito`);
+    if (r) verNfs(d.pedido.id); // atualiza a janela aberta
+}
+
 async function excluirNf(idx) {
     const d = estado.pedidoAtual, nf = d.recebimentos[idx];
     if (!confirm(`Excluir a NF ${nf.nf} (${fmtMoney(nf.valor)})?\nO saldo dos itens volta e o valor deixa de constar como liquidado.`)) return;
@@ -759,34 +838,6 @@ async function excluirNf(idx) {
         const p = estado.pedidos.find(x => x.id === d.pedido.id);
         if (p && p.qt_recebimentos > 0) verNfs(d.pedido.id);
     }
-}
-
-// =====================================================================
-// PAGAMENTOS (OB)
-// =====================================================================
-function abrirPagamento() {
-    const f = estado.financeiro;
-    $('pagInfo').innerHTML = `Liquidado <strong>${fmtMoney(f.liquidado)}</strong> · já pago ${fmtMoney(f.pago)} · <strong class="text-amber">a pagar ${fmtMoney(f.a_pagar)}</strong>`;
-    $('pgOb').value = ''; $('pgValor').value = ''; $('pgNf').value = ''; $('pgObs').value = ''; $('pgData').value = hoje();
-    abrirModal('modalPagamento');
-}
-
-async function salvarPagamento() {
-    const valor = parseNumBR($('pgValor').value);
-    if (!$('pgOb').value.trim()) { $('pgOb').focus(); toast('Informe o número da OB', 'error'); return; }
-    if (!(valor > 0)) { $('pgValor').focus(); toast('Informe o valor pago', 'error'); return; }
-    if (valor > estado.financeiro.a_pagar + 0.005) { toast(`Valor acima do que falta pagar (${fmtMoney(estado.financeiro.a_pagar)})`, 'error'); return; }
-    const d = await acao(enviarJSON(`/api/empenhos/${estado.empenhoId}/pagamentos`, 'POST', {
-        ob: $('pgOb').value.trim(), valor, data_pagamento: $('pgData').value,
-        nf: $('pgNf').value.trim(), observacoes: $('pgObs').value.trim(),
-    }), 'Pagamento registrado');
-    if (d) fecharModal('modalPagamento');
-}
-
-async function excluirPagamento(id) {
-    const p = estado.pagamentos.find(x => x.id === id);
-    if (!confirm(`Excluir o pagamento OB ${p ? p.ob : ''} (${fmtMoney(p ? p.valor : 0)})?`)) return;
-    await acao(enviarJSON(`/api/pagamentos/${id}`, 'DELETE'), 'Pagamento enviado para a lixeira');
 }
 
 // =====================================================================
@@ -827,14 +878,13 @@ document.addEventListener('DOMContentLoaded', () => {
     $('mPedPrazo').addEventListener('input', atualizarVencimento);
     $('btnSalvarPedido').addEventListener('click', e => comBotao(e.currentTarget, salvarPedido));
     $('btnSalvarRecebimento').addEventListener('click', e => comBotao(e.currentTarget, salvarRecebimento));
-    $('btnNovoPagamento').addEventListener('click', abrirPagamento);
-    $('pgTudo').addEventListener('click', () => { $('pgValor').value = estado.financeiro.a_pagar.toFixed(2).replace('.', ','); });
-    $('btnSalvarPagamento').addEventListener('click', e => comBotao(e.currentTarget, salvarPagamento));
     $('btnVoltar').addEventListener('click', () => voltarLista());
     $('btnExcluirEmpenho').addEventListener('click', () => apagarEmpenho(estado.empenhoId));
     $('boxHistorico').addEventListener('toggle', () => { if ($('boxHistorico').open) carregarHistorico(); });
 
-    ['fBusca', 'fSituacao', 'fAno', 'fSaldo'].forEach(id => $(id).addEventListener('input', renderLista));
+    ['fBusca', 'fSituacao', 'fAno', 'fFornecedor', 'fSaldo', 'fAgrupar'].forEach(id => $(id).addEventListener('input', renderLista));
+    try { const ag = localStorage.getItem('aprov-agrupar'); if (ag !== null) $('fAgrupar').checked = ag === '1'; } catch (e) { /* sem storage */ }
+    $('fAgrupar').addEventListener('change', () => { try { localStorage.setItem('aprov-agrupar', $('fAgrupar').checked ? '1' : '0'); } catch (e) { /* sem storage */ } });
     $('btnLimparFiltros').addEventListener('click', limparFiltros);
 
     ativarOrdenacao($('tblEmpenhos'), estado.sortLista, renderLista);

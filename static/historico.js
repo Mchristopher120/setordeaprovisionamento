@@ -4,9 +4,9 @@ const $ = (id) => document.getElementById(id);
 
 const ACAO_ROTULO = {
     CRIAR: ['🆕 Criou', 'info'], EDITAR: ['✏️ Editou', 'neutro'], EXCLUIR: ['🗑 Excluiu', 'critico'],
-    RESTAURAR: ['♻️ Restaurou', 'ok'], RECEBER: ['📥 Recebeu NF', 'ok'], PAGAR: ['💰 Pagou', 'ok'],
+    RESTAURAR: ['♻️ Restaurou', 'ok'], RECEBER: ['📥 Recebeu NF', 'ok'], PAGAR: ['💰 NF paga', 'ok'],
     ENCERRAR: ['🔒 Encerrou', 'atencao'], REFORCO: ['➕ Reforço', 'ok'], ANULACAO: ['➖ Anulação', 'atencao'],
-    LOGIN: ['🔑 Entrou', 'neutro'], EXPORTAR: ['⬇ Exportou', 'neutro'],
+    LOGIN: ['🔑 Entrou', 'neutro'], DESFAZER: ['↩ Desfez pagamento', 'atencao'], EXPORTAR: ['⬇ Exportou', 'neutro'],
 };
 const TIPO_ROTULO = { empenho: '📦 Empenho', item: '📄 Item', pedido: '🧾 Pedido', nf: '🧾 NF', pagamento: '💰 Pagamento' };
 

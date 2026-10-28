@@ -45,7 +45,7 @@
             </div>
             <div class="card">
                 <div class="card-title">Maior Saldo a Liquidar</div>
-                <div class="card-sub">Top 5 credores por valor ainda não liquidado</div>
+                <div class="card-sub">Top 5 fornecedores por valor ainda não liquidado</div>
                 <div id="chartCredores" class="chart-box"></div>
             </div>
         </section>
@@ -54,7 +54,7 @@
             <div class="chart-head">
                 <div>
                     <div class="card-title">Evolução Mensal</div>
-                    <div class="card-sub">Valor liquidado (NFs recebidas) e pago (OBs) nos últimos 12 meses</div>
+                    <div class="card-sub">Valor liquidado (NFs recebidas) e pago (NFs marcadas como pagas) nos últimos 12 meses</div>
                 </div>
                 <div class="legend">
                     <span><i style="background:var(--liq)"></i>Liquidado</span>
@@ -89,7 +89,7 @@
                     <thead>
                         <tr>
                             <th data-key="ne">NE</th>
-                            <th data-key="nome_credor">Credor</th>
+                            <th data-key="nome_credor">Fornecedor</th>
                             <th data-key="valor_empenhado" data-default="desc">Empenhado</th>
                             <th data-key="valor_liquidado" data-default="desc">Liquidado</th>
                             <th data-key="valor_pago" data-default="desc">Pago</th>

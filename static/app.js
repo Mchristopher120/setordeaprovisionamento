@@ -65,7 +65,7 @@ function renderKPIs(s) {
         <div class="kpi red">
             <div class="kpi-label">A Pagar</div>
             <div class="kpi-value">${fmtMoney(s.valor_a_pagar)}</div>
-            <div class="kpi-sub">Liquidado e ainda sem OB</div>
+            <div class="kpi-sub">NFs recebidas ainda não pagas</div>
         </div>
         <div class="kpi amber">
             <div class="kpi-label">Pedidos em Aberto</div>

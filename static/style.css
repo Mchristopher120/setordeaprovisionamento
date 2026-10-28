@@ -207,7 +207,7 @@ body {
 .topbar .btn-primary:hover { background: #eef3ff; color: #1d4ed8; }
 .topbar .btn:focus-visible { box-shadow: 0 0 0 3px rgba(255,255,255,.45); }
 
-.btn-sm { padding: 6px 10px; font-size: 13px; border-radius: 7px; }
+.btn-sm { padding: 8px 13px; font-size: 14px; border-radius: 8px; min-height: 38px; }
 
 /* Container */
 .container { max-width: 1280px; margin: 24px auto; padding: 0 20px; }
@@ -424,13 +424,17 @@ tbody tr:hover { background: var(--row-hover); }
 #tblItens { font-size: 13px; }
 #tblItens th { font-size: 11px; letter-spacing: .2px; }
 #tblItens .pct-cell { min-width: 64px; }
-td.acoes .btn-sm { padding: 6px 8px; }
+td.acoes .btn-sm { padding: 8px 11px; min-width: 40px; font-size: 15px; }
 .text-green { color: var(--green); }
 .text-red { color: var(--red); }
 .text-amber { color: var(--amber); }
 .text-teal { color: var(--liq-strong); }
 td.acoes { white-space: nowrap; }
-td.acoes .btn + .btn { margin-left: 4px; }
+td.acoes .btn + .btn { margin-left: 6px; }
+/* Pedidos têm muitas ações: deixam quebrar linha em vez de alargar a tabela */
+#tblPedidos td.acoes { white-space: normal; min-width: 230px; }
+#tblPedidos td.acoes .btn { margin: 3px; }
+#tblPedidos td.acoes .btn + .btn { margin-left: 3px; }
 
 /* % com mini barra */
 .pct-cell { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 84px; }
@@ -505,7 +509,7 @@ td.acoes .btn + .btn { margin-left: 4px; }
 /* Cards de Nota Fiscal */
 .nf-list { display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow-y: auto; }
 .nf-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); }
-.nf-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.nf-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .nf-head strong { font-size: 15px; color: var(--primary-dark); }
 .nf-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
 .nf-table thead th {
@@ -707,7 +711,7 @@ tbody tr.row-total td { background: var(--surface-2); font-weight: 700; }
 .timeline li { display: flex; gap: 10px; font-size: 14px; }
 .tl-ico { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 13px; }
 .nf-title { flex: 1; }
-.nf-acoes { display: flex; gap: 6px; }
+.nf-acoes { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 /* ---------- Abas ---------- */
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
@@ -750,6 +754,36 @@ tbody tr.row-total td { background: var(--surface-2); font-weight: 700; }
 .evo-bar.liq { background: var(--liq); }
 .evo-bar.pago { background: var(--green); }
 .evo-mes { height: 26px; line-height: 26px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* ---------- Pagamento na NF ---------- */
+.btn-success { background: var(--green); color: #fff; border-color: var(--green); }
+.btn-success:hover { filter: brightness(1.08); }
+:root[data-theme="dark"] .btn-success { color: #052e1f; }
+.btn-attention { background: var(--amber-bg); color: var(--warn-text); border-color: transparent; }
+.btn-attention:hover { filter: brightness(.97); }
+.pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 20px; background: var(--amber); color: #fff; margin-left: 2px; }
+.pill.ok { background: var(--green-bg); color: var(--ok-text); }
+:root[data-theme="dark"] .pill:not(.ok) { color: #1f1300; }
+.nf-status { margin-top: 4px; }
+.nf-card.nf-paga { border-color: var(--ok-border); }
+.aviso-legado {
+    margin-top: 12px; padding: 12px 14px; border-radius: 10px; font-size: 14px;
+    background: var(--amber-bg); border: 1px solid var(--alert-soft-border);
+    display: flex; flex-direction: column; gap: 8px;
+}
+.aviso-legado ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.aviso-legado li { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+
+/* ---------- Lista agrupada por fornecedor ---------- */
+#tblEmpenhos.agrupado .col-forn { display: none; }
+tbody tr.grupo-row { background: var(--surface-2); cursor: pointer; }
+tbody tr.grupo-row:hover { background: var(--primary-bg); }
+tbody tr.grupo-row:focus-visible { outline: none; box-shadow: inset var(--focus); }
+tbody tr.grupo-row td { border-top: 2px solid var(--border-strong); font-weight: 600; }
+tbody tr.grupo-row strong { font-size: 15px; }
+.grupo-seta { display: inline-block; width: 16px; color: var(--muted); transition: transform .15s ease; }
+tr.grupo-row.fechado .grupo-seta { transform: rotate(-90deg); }
+.grupo-qtd { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0 6px 0 4px; }
 
 /* Responsive */
 @media (max-width: 1100px) {
