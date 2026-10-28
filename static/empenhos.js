@@ -62,13 +62,15 @@ async function carregarLista() {
         fetchJSON('/api/stats_empenhos'),
     ]);
     estado.empenhos = empenhos;
-    renderKpis(stats);
+    marcarPendencias(stats);
+    if (!estado.empenhoId) renderKpis(stats); // com um empenho aberto, os cartões mostram os números dele
     preencherAnos();
     renderLista();
 }
 
 function renderKpis(s) {
     marcarPendencias(s);
+    $('kpis').classList.remove('kpis-empenho');
     $('kpis').innerHTML = `
         <div class="kpi accent"><div class="kpi-label">Empenhos</div><div class="kpi-value">${fmtNum(s.empenhos)}</div><div class="kpi-sub">${fmtNum(s.itens)} itens</div></div>
         <div class="kpi slate"><div class="kpi-label">Empenhado</div><div class="kpi-value">${fmtMoney(s.valor_empenhado)}</div><div class="kpi-sub">A liquidar ${fmtMoneyCurto(s.valor_a_liquidar)}</div></div>
@@ -76,9 +78,38 @@ function renderKpis(s) {
         <div class="kpi green"><div class="kpi-label">Pago</div><div class="kpi-value">${fmtMoney(s.valor_pago)}</div><div class="kpi-sub">A pagar ${fmtMoneyCurto(s.valor_a_pagar)}</div></div>
         <div class="kpi amber"><div class="kpi-label">Pedidos em Aberto</div><div class="kpi-value">${fmtNum(s.pedidos_em_aberto)}</div>
             <div class="kpi-sub">${s.pedidos_atrasados ? `<span class="text-red"><strong>${fmtNum(s.pedidos_atrasados)}</strong> atrasado(s)</span>` : 'nenhum atrasado'}</div></div>`;
+    ajustarKpis();
+}
+
+function ajustarKpis() {
     // A fonte Inter pode demorar um instante; ajusta de novo quando ela terminar de carregar
     ajustarValores(document.getElementById('kpis'));
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => ajustarValores(document.getElementById('kpis')));
+}
+
+/** Cartões de cima com os números do empenho aberto (substituem a linha de etiquetas). */
+function renderKpisEmpenho(e, f) {
+    const peds = estado.pedidos || [];
+    const abertos = peds.filter(p => p.status === 'INCLUIDO' || p.status === 'PARCIAL');
+    const atrasados = peds.filter(p => p.dias_atraso > 0).length;
+    const nfsAPagar = peds.reduce((a, p) => a + (p.qt_nfs_a_pagar || 0), 0);
+    const pctLiq = f.empenhado ? f.liquidado / f.empenhado * 100 : 0;
+    const pctPago = f.empenhado ? f.pago / f.empenhado * 100 : 0;
+    const nItens = (estado.itens || []).length;
+    $('kpis').classList.add('kpis-empenho');
+    $('kpis').innerHTML = `
+        <div class="kpi accent"><div class="kpi-label">Empenho</div><div class="kpi-value">${esc(e.ne)}</div>
+            <div class="kpi-sub">${fmtNum(nItens)} ${nItens === 1 ? 'item' : 'itens'}${e.processo ? ` · Processo ${esc(e.processo)}` : ''}</div></div>
+        <div class="kpi slate"><div class="kpi-label">Empenhado</div><div class="kpi-value">${fmtMoney(f.empenhado)}</div>
+            <div class="kpi-sub">A liquidar <strong class="text-red">${fmtMoney(f.a_liquidar)}</strong></div></div>
+        <div class="kpi teal"><div class="kpi-label">Liquidado</div><div class="kpi-value">${fmtMoney(f.liquidado)}</div>
+            <div class="kpi-sub">${pct(pctLiq)} do empenhado</div></div>
+        <div class="kpi green"><div class="kpi-label">Pago</div><div class="kpi-value">${fmtMoney(f.pago)}</div>
+            <div class="kpi-sub">${f.a_pagar > 0.005 ? `A pagar <strong class="text-amber">${fmtMoney(f.a_pagar)}</strong>${nfsAPagar ? ` · ${nfsAPagar} NF${nfsAPagar > 1 ? 's' : ''}` : ''}` : `${pct(pctPago)} do empenhado`}</div></div>
+        <div class="kpi amber"><div class="kpi-label">Pedidos em Aberto</div><div class="kpi-value">${fmtNum(abertos.length)}</div>
+            <div class="kpi-sub">${atrasados ? `<span class="text-red"><strong>${fmtNum(atrasados)}</strong> atrasado(s)</span>`
+                : (peds.length ? `de ${fmtNum(peds.length)} pedido${peds.length > 1 ? 's' : ''}` : 'nenhum pedido ainda')}</div></div>`;
+    ajustarKpis();
 }
 
 function preencherAnos() {
@@ -277,13 +308,7 @@ async function abrirDetalhe(id, { pushUrl = true, rolar = true } = {}) {
     const e = data.empenho, f = data.financeiro;
     document.title = `${e.ne} — Empenhos`;
     $('detTitulo').innerHTML = `Empenho ${esc(e.ne)} — ${esc(e.nome_credor)}`;
-    $('detResumo').innerHTML = `
-        <span class="chip">Empenhado <strong>${fmtMoney(f.empenhado)}</strong></span>
-        <span class="chip chip-teal">Liquidado <strong>${fmtMoney(f.liquidado)}</strong></span>
-        <span class="chip chip-green">Pago <strong>${fmtMoney(f.pago)}</strong></span>
-        <span class="chip chip-red">A liquidar <strong>${fmtMoney(f.a_liquidar)}</strong></span>
-        <span class="chip chip-amber">A pagar <strong>${fmtMoney(f.a_pagar)}</strong></span>
-        ${e.processo ? `<span class="chip">Processo <strong>${esc(e.processo)}</strong></span>` : ''}`;
+    renderKpisEmpenho(e, f);
     $('secLista').style.display = 'none';
     $('secDetalhe').style.display = 'block';
     renderItens();
@@ -876,7 +901,7 @@ function rotaAtual() {
     const id = parseInt(new URLSearchParams(location.search).get('id'), 10);
     if (id) {
         abrirDetalhe(id, { pushUrl: false });
-        fetchJSON('/api/stats_empenhos').then(renderKpis).catch(err => toast(err.message, 'error'));
+        fetchJSON('/api/stats_empenhos').then(marcarPendencias).catch(() => { /* contador é opcional */ });
     } else {
         const sit = new URLSearchParams(location.search).get('situacao');
         if (sit && [...$('fSituacao').options].some(o => o.value === sit)) {
