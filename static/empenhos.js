@@ -97,7 +97,7 @@ function filtrar(lista) {
     const sit = $('fSituacao').value, ano = $('fAno').value, saldo = $('fSaldo').checked, forn = $('fFornecedor').value;
     $('btnLimparFiltros').hidden = !(busca || sit || ano || saldo || forn);
     return lista.filter(e => {
-        if (busca && !normalizar(`${e.ne} ${e.nome_credor} ${e.processo}`).includes(busca)) return false;
+        if (busca && !normalizar(`${e.ne} ${e.nome_credor} ${e.processo} ${(e.itens_resumo || []).join(' ')}`).includes(busca)) return false;
         if (sit === 'ATRASO') { if (!e.pedidos_atrasados) return false; }
         else if (sit === 'VENCENDO') { if (!e.pedidos_vencendo) return false; }
         else if (sit === 'APAGAR') { if (!e.nfs_a_pagar) return false; }
@@ -111,11 +111,20 @@ function filtrar(lista) {
 
 const SITUACAO = { ANDAMENTO: ['Em andamento', 'info'], CONCLUIDO: ['Concluído', 'ok'], SEM_ITENS: ['Sem itens', 'neutro'] };
 
+/** 'abóbora moranga, alface crespa' -> 'Abóbora moranga, alface crespa' */
+function textoResumo(lista) {
+    const t = (lista || []).join(', ');
+    return t ? t.charAt(0).toUpperCase() + t.slice(1) : '';
+}
+
 function linhaEmpenho(e) {
     const [rot, cls] = SITUACAO[e.situacao] || ['', ''];
+    const resumo = textoResumo(e.itens_resumo);
+    const qt = (e.itens_resumo || []).length;
     return `
         <tr>
-            <td class="text-left"><strong>${esc(e.ne)}</strong>
+            <td class="text-left"><div class="ne-linha"><strong>${esc(e.ne)}</strong>${resumo
+                ? `<span class="ne-itens" title="${esc(`${qt} ${qt > 1 ? 'itens' : 'item'}: ${resumo}`)}">${esc(resumo)}</span>` : ''}</div>
                 <div class="cell-badges"><span class="badge ${cls}">${rot}</span>
                 ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">${ico('alarm')} ${e.pedidos_atrasados} atrasado${e.pedidos_atrasados > 1 ? 's' : ''}</span>` : ''}
                 ${e.nfs_a_pagar ? `<span class="badge atencao" title="NFs recebidas aguardando pagamento">${ico('cash')} ${e.nfs_a_pagar} NF${e.nfs_a_pagar > 1 ? 's' : ''} a pagar</span>` : ''}</div></td>
@@ -213,11 +222,15 @@ function abrirModalEmpenho(editar = false) {
     $('mNe').value = e ? e.ne : '';
     $('mProcesso').value = e ? (e.processo || '') : '';
     $('mCredor').value = e ? e.nome_credor : '';
+    $('mResumo').value = e ? (e.resumo || '') : '';
+    const auto = e ? (estado.resumoAuto || '') : '';
+    $('mResumo').placeholder = auto ? `Automático: ${auto}` : 'Automático (gerado a partir dos itens)';
     abrirModal('modalEmpenho');
 }
 
 async function salvarEmpenho() {
-    const corpo = { ne: $('mNe').value.trim(), processo: $('mProcesso').value.trim(), nome_credor: $('mCredor').value.trim() };
+    const corpo = { ne: $('mNe').value.trim(), processo: $('mProcesso').value.trim(), nome_credor: $('mCredor').value.trim(),
+        resumo: $('mResumo').value.trim() };
     if (!corpo.ne || !corpo.nome_credor) { toast('Preencha NE e Fornecedor', 'error'); return; }
     if (estado.empenhoEditando) {
         const d = await acao(enviarJSON(`/api/empenhos/${estado.empenhoEditando.id}`, 'PUT', corpo), 'Empenho atualizado');
@@ -255,6 +268,7 @@ async function abrirDetalhe(id, { pushUrl = true, rolar = true } = {}) {
     Object.assign(estado, {
         empenhoId: id, empenhoAtual: data.empenho, itens: data.itens, pedidos: data.pedidos,
         obsAntigas: data.pagamentos_antigos || [], movimentos: data.movimentos, financeiro: data.financeiro,
+        resumoAuto: data.resumo_auto || '',
     });
     const e = data.empenho, f = data.financeiro;
     document.title = `${e.ne} — Empenhos`;

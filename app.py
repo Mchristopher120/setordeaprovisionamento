@@ -10,6 +10,8 @@ import time
 from datetime import date, datetime, timedelta
 from functools import wraps
 
+from resumo_itens import resumo_de_itens
+
 from flask import (Flask, g, jsonify, redirect, render_template, request,
                    send_file, session, url_for)
 
@@ -261,6 +263,8 @@ COLUNAS_NOVAS = [
     # Pagamento marcado direto na NF (substitui o lançamento separado de OB)
     ("recebimentos", "pago_em", "TEXT"),
     ("recebimentos", "pago_por", "TEXT"),
+    # Resumo dos itens escrito à mão (vazio = gerado das descrições)
+    ("empenhos", "resumo", "TEXT"),
 ]
 
 
@@ -706,9 +710,13 @@ def financeiro_empenhos(db):
         "       + 1e-9 < i4.qtde_empenhada) as qt_itens_pendentes"
         " FROM empenhos e ORDER BY e.id DESC"
     ).fetchall()
+    descricoes = {}
+    for it in db.execute("SELECT empenho_id, descricao FROM itens ORDER BY id").fetchall():
+        descricoes.setdefault(it["empenho_id"], []).append(it["descricao"])
     out = []
     for r in rows:
         d = dict(r)
+        d["itens_resumo"] = resumo_do_empenho(d.get("resumo"), descricoes.get(d["id"], []))
         emp = float(d["valor_empenhado"] or 0)
         liq = float(d["valor_liquidado"] or 0)
         pago = float(d["valor_pago"] or 0)
@@ -727,6 +735,13 @@ def financeiro_empenhos(db):
         d["ano"] = m.group(1) if m else (d.get("criado_em") or "")[:4]
         out.append(d)
     return out
+
+
+def resumo_do_empenho(manual, descricoes):
+    """Lista de nomes curtos: o resumo digitado (separado por vírgula) ou o gerado das descrições."""
+    if (manual or "").strip():
+        return [p.strip() for p in manual.split(",") if p.strip()]
+    return resumo_de_itens(descricoes)
 
 
 def liquidado_e_pago(db, eid):
@@ -788,18 +803,24 @@ def api_criar_empenho():
     ne = (data.get("ne") or "").strip()
     processo = (data.get("processo") or "").strip()
     nome_credor = (data.get("nome_credor") or "").strip().upper()
+    resumo = _limpar_resumo(data.get("resumo"))
     if not ne:
         return erro("Informe o número do empenho (NE)")
     if not nome_credor:
         return erro("Informe o fornecedor")
     db = get_db()
     cur = db.execute(
-        "INSERT INTO empenhos (ne, processo, nome_credor, criado_em) VALUES (?,?,?,?)",
-        (ne, processo, nome_credor, agora()),
+        "INSERT INTO empenhos (ne, processo, nome_credor, criado_em, resumo) VALUES (?,?,?,?,?)",
+        (ne, processo, nome_credor, agora(), resumo),
     )
     registrar(db, "CRIAR", "empenho", cur.lastrowid, cur.lastrowid, f"Empenho {ne} criado ({nome_credor})")
     db.commit()
     return jsonify({"ok": True, "id": cur.lastrowid})
+
+
+def _limpar_resumo(v):
+    partes = [re.sub(r"\s+", " ", p).strip() for p in str(v or "").split(",")]
+    return ", ".join(p for p in partes if p)[:300] or None
 
 
 @app.route("/api/empenhos/<int:eid>", methods=["PUT"])
@@ -812,11 +833,13 @@ def api_editar_empenho(eid):
     ne = (data.get("ne") or "").strip()
     credor = (data.get("nome_credor") or "").strip().upper()
     processo = (data.get("processo") or "").strip()
+    resumo = _limpar_resumo(data.get("resumo"))
     if not ne or not credor:
         return erro("NE e fornecedor são obrigatórios")
-    db.execute("UPDATE empenhos SET ne=?, processo=?, nome_credor=? WHERE id=?", (ne, processo, credor, eid))
+    db.execute("UPDATE empenhos SET ne=?, processo=?, nome_credor=?, resumo=? WHERE id=?", (ne, processo, credor, resumo, eid))
     mud = [f"{c}: {e[k] or '—'} → {v or '—'}" for c, k, v in
-           (("NE", "ne", ne), ("Fornecedor", "nome_credor", credor), ("Processo", "processo", processo)) if (e[k] or "") != v]
+           (("NE", "ne", ne), ("Fornecedor", "nome_credor", credor), ("Processo", "processo", processo),
+            ("Resumo dos itens", "resumo", resumo or "")) if (e[k] or "") != (v or "")]
     registrar(db, "EDITAR", "empenho", eid, eid, f"Empenho {ne} editado" + (": " + "; ".join(mud) if mud else ""))
     db.commit()
     return jsonify({"ok": True})
@@ -864,6 +887,7 @@ def api_detalhe_empenho(eid):
     empenhado = sum(i["valor_total"] or 0 for i in itens)
     return jsonify({
         "empenho": dict(empenho),
+        "resumo_auto": ", ".join(resumo_de_itens([i["descricao"] for i in itens])),
         "itens": itens,
         "pedidos": pedidos,
         "pagamentos_antigos": pagamentos,
@@ -1910,10 +1934,10 @@ def api_exportar():
     lista = financeiro_empenhos(db)
     sit = {"SEM_ITENS": "Sem itens", "ANDAMENTO": "Em andamento", "CONCLUIDO": "Concluído"}
     aba("Empenhos",
-        ["NE", "Fornecedor", "Processo", "Situação", "Empenhado", "Liquidado", "Pago", "A liquidar", "A pagar", "% Liquidado", "% Pago"],
-        [[e["ne"], e["nome_credor"], e["processo"], sit[e["situacao"]], e["valor_empenhado"], e["valor_liquidado"],
+        ["NE", "Fornecedor", "Processo", "Itens (resumo)", "Situação", "Empenhado", "Liquidado", "Pago", "A liquidar", "A pagar", "% Liquidado", "% Pago"],
+        [[e["ne"], e["nome_credor"], e["processo"], ", ".join(e["itens_resumo"]), sit[e["situacao"]], e["valor_empenhado"], e["valor_liquidado"],
           e["valor_pago"], e["a_liquidar"], e["a_pagar"], e["percentual_liquidado"], e["percentual_pago"]] for e in lista],
-        {5: MOEDA, 6: MOEDA, 7: MOEDA, 8: MOEDA, 9: MOEDA, 10: PCT, 11: PCT})
+        {6: MOEDA, 7: MOEDA, 8: MOEDA, 9: MOEDA, 10: MOEDA, 11: PCT, 12: PCT})
 
     nes = {e["id"]: e for e in lista}
     itens = [completar_item(r) for r in db.execute(SQL_ITENS + " ORDER BY i.empenho_id, i.id").fetchall()]

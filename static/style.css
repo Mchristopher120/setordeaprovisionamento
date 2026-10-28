@@ -380,6 +380,7 @@ body {
     justify-content: space-between;
     margin-bottom: 14px;
     gap: 12px;
+    flex-wrap: wrap;
 }
 .count-badge {
     background: var(--primary-bg);
@@ -966,3 +967,20 @@ tbody td a:not(.btn):hover { text-decoration: underline; }
     border-top: 2px solid var(--border-strong); background: var(--surface-2);
 }
 #resultado tfoot td.text-left { text-align: left; padding-left: 16px; }
+
+/* Resumo dos itens junto do NE (lista de empenhos).
+   width:0 + min-width:100% => o texto ocupa o espaço que a coluna já tem, sem alargar a tabela. */
+.ne-linha { display: flex; flex-direction: column; gap: 1px; width: 0; min-width: 100%; }
+.ne-linha strong { flex: none; }
+.ne-itens {
+    color: var(--muted); font-size: 12.5px; font-weight: 400; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default;
+}
+.agrupado .ne-linha { flex-direction: row; align-items: baseline; gap: 10px; }
+.agrupado .ne-itens { flex: 1 1 0; font-size: 13px; }
+#tblEmpenhos thead th:first-child { width: 24%; }
+#tblEmpenhos.agrupado thead th:first-child { width: 38%; }
+.campo-ajuda { margin: 6px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+@media (max-width: 860px) {
+    .agrupado .ne-linha { flex-direction: column; gap: 1px; }
+}
