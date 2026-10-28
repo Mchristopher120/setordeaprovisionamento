@@ -98,8 +98,8 @@ function renderKpisEmpenho(e, f) {
     const nItens = (estado.itens || []).length;
     $('kpis').classList.add('kpis-empenho');
     $('kpis').innerHTML = `
-        <div class="kpi accent"><div class="kpi-label">Empenho</div><div class="kpi-value">${esc(e.ne)}</div>
-            <div class="kpi-sub">${fmtNum(nItens)} ${nItens === 1 ? 'item' : 'itens'}${e.processo ? ` · Processo ${esc(e.processo)}` : ''}</div></div>
+        <div class="kpi accent"><div class="kpi-label">Processo</div><div class="kpi-value">${e.processo ? esc(e.processo) : '<span class="muted">—</span>'}</div>
+            <div class="kpi-sub">${fmtNum(nItens)} ${nItens === 1 ? 'item' : 'itens'} no empenho</div></div>
         <div class="kpi slate"><div class="kpi-label">Empenhado</div><div class="kpi-value">${fmtMoney(f.empenhado)}</div>
             <div class="kpi-sub">A liquidar <strong class="text-red">${fmtMoney(f.a_liquidar)}</strong></div></div>
         <div class="kpi teal"><div class="kpi-label">Liquidado</div><div class="kpi-value">${fmtMoney(f.liquidado)}</div>
