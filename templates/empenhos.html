@@ -34,7 +34,8 @@
                 <input type="search" id="fBusca" class="input" placeholder="Buscar NE, fornecedor, processo ou item…" aria-label="Buscar">
                 <select id="fSituacao" class="input" aria-label="Situação">
                     <option value="">Todas as situações</option>
-                    <option value="ANDAMENTO">Em andamento</option>
+                    <option value="ABERTO">Com pedido em aberto</option>
+                    <option value="ANDAMENTO">Em andamento (itens a receber)</option>
                     <option value="CONCLUIDO">Concluídos</option>
                     <option value="SEM_ITENS">Sem itens</option>
                     <option value="ATRASO">Com pedido atrasado</option>
@@ -148,7 +149,9 @@
                 <label for="mProcesso">Processo</label>
                 <input type="text" id="mProcesso" placeholder="Nº do processo (opcional)">
                 <label for="mCredor">Fornecedor *</label>
-                <input type="text" id="mCredor" placeholder="Nome do fornecedor">
+                <input type="text" id="mCredor" placeholder="Digite ou escolha um fornecedor cadastrado" list="listaFornecedores" autocomplete="off">
+                <datalist id="listaFornecedores"></datalist>
+                <p class="campo-ajuda" id="credorInfo"></p>
                 <label for="mResumo">Resumo dos itens</label>
                 <input type="text" id="mResumo" maxlength="300" placeholder="Automático (gerado a partir dos itens)">
                 <p class="campo-ajuda">Deixe em branco para o sistema montar sozinho a partir das descrições. Se quiser outro texto, escreva separando por vírgula (ex.: batata, cebola, trigo).</p>
@@ -299,6 +302,42 @@
             <div id="nfCorpo" class="nf-list"></div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" data-close>Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL ENVIAR PEDIDO POR E-MAIL (texto pronto, sem IA) -->
+    <div class="modal" id="modalEnviar">
+        <div role="dialog" aria-modal="true" aria-labelledby="envTitulo" class="modal-box modal-large">
+            <h3 id="envTitulo">Enviar pedido</h3>
+            <div class="modal-body">
+                <div id="envAviso" class="envio-aviso" hidden></div>
+                <label for="envPara">Para</label>
+                <input type="email" id="envPara" multiple placeholder="email@fornecedor.com.br">
+                <label class="check" id="envSalvarBox" hidden><input type="checkbox" id="envSalvar" checked> Salvar este e-mail no cadastro do fornecedor</label>
+                <label for="envAssunto">Assunto</label>
+                <input type="text" id="envAssunto">
+                <label for="envCorpo">Mensagem <span class="muted small">(pode editar antes de abrir o e-mail)</span></label>
+                <textarea id="envCorpo" rows="13" class="envio-corpo"></textarea>
+                <div class="envio-opcoes">
+                    <button type="button" class="envio-op destaque" id="envGmail">
+                        <span class="envio-op-ico">{{ ico('mail') }}</span>
+                        <span><strong>Abrir no Gmail</strong><span class="muted small">Abre o e-mail pronto e baixa o PDF. Arraste o PDF baixado para a mensagem e clique em Enviar.</span></span>
+                    </button>
+                    <button type="button" class="envio-op" id="envEml">
+                        <span class="envio-op-ico">{{ ico('file-upload') }}</span>
+                        <span><strong>Outlook / Thunderbird: com o PDF já anexado</strong><span class="muted small">Baixa um arquivo de e-mail (.eml). Ao abrir, a mensagem aparece pronta, com o anexo.</span></span>
+                    </button>
+                    <button type="button" class="envio-op" id="envMailto">
+                        <span class="envio-op-ico">{{ ico('external-link') }}</span>
+                        <span><strong>Outro programa de e-mail</strong><span class="muted small">Abre o e-mail padrão do computador e baixa o PDF para anexar.</span></span>
+                    </button>
+                </div>
+                <p class="muted small" id="envEnviado"></p>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" id="envCopiar">{{ ico('copy') }} Copiar texto</button>
+                <button type="button" class="btn btn-secondary" data-close>Fechar</button>
             </div>
         </div>
     </div>

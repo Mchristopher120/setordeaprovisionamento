@@ -101,6 +101,7 @@ function filtrar(lista) {
         if (sit === 'ATRASO') { if (!e.pedidos_atrasados) return false; }
         else if (sit === 'VENCENDO') { if (!e.pedidos_vencendo) return false; }
         else if (sit === 'APAGAR') { if (!e.nfs_a_pagar) return false; }
+        else if (sit === 'ABERTO') { if (!e.pedidos_em_aberto) return false; }
         else if (sit && e.situacao !== sit) return false;
         if (ano && e.ano !== ano) return false;
         if (forn && e.nome_credor !== forn) return false;
@@ -109,7 +110,8 @@ function filtrar(lista) {
     });
 }
 
-const SITUACAO = { ANDAMENTO: ['Em andamento', 'info'], CONCLUIDO: ['Concluído', 'ok'], SEM_ITENS: ['Sem itens', 'neutro'] };
+// Selo de situação: "Em andamento" não aparece mais; no lugar entra "Pedido em aberto" (quando houver)
+const SITUACAO = { CONCLUIDO: ['Concluído', 'ok'], SEM_ITENS: ['Sem itens', 'neutro'] };
 
 /** 'abóbora moranga, alface crespa' -> 'Abóbora moranga, alface crespa' */
 function textoResumo(lista) {
@@ -125,7 +127,8 @@ function linhaEmpenho(e) {
         <tr>
             <td class="text-left"><div class="ne-linha"><strong>${esc(e.ne)}</strong>${resumo
                 ? `<span class="ne-itens" title="${esc(`${qt} ${qt > 1 ? 'itens' : 'item'}: ${resumo}`)}">${esc(resumo)}</span>` : ''}</div>
-                <div class="cell-badges"><span class="badge ${cls}">${rot}</span>
+                <div class="cell-badges">${rot ? `<span class="badge ${cls}">${rot}</span>` : ''}
+                ${e.pedidos_em_aberto ? `<span class="badge info" title="Pedidos ainda não entregues por completo">${ico('hourglass')} ${e.pedidos_em_aberto > 1 ? `${e.pedidos_em_aberto} pedidos em aberto` : 'Pedido em aberto'}</span>` : ''}
                 ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">${ico('alarm')} ${e.pedidos_atrasados} atrasado${e.pedidos_atrasados > 1 ? 's' : ''}</span>` : ''}
                 ${e.nfs_a_pagar ? `<span class="badge atencao" title="NFs recebidas aguardando pagamento">${ico('cash')} ${e.nfs_a_pagar} NF${e.nfs_a_pagar > 1 ? 's' : ''} a pagar</span>` : ''}</div></td>
             <td class="col-forn">${esc(e.nome_credor)}</td>
@@ -223,6 +226,7 @@ function abrirModalEmpenho(editar = false) {
     $('mProcesso').value = e ? (e.processo || '') : '';
     $('mCredor').value = e ? e.nome_credor : '';
     $('mResumo').value = e ? (e.resumo || '') : '';
+    carregarFornecedores().then(infoCredor);
     const auto = e ? (estado.resumoAuto || '') : '';
     $('mResumo').placeholder = auto ? `Automático: ${auto}` : 'Automático (gerado a partir dos itens)';
     abrirModal('modalEmpenho');
@@ -352,7 +356,7 @@ function renderMovimentos() {
 
 const STATUS = {
     RECEBIDO: ['Recebido', 'ok'], PARCIAL: ['Parcial', 'atencao'],
-    INCLUIDO: ['Aguardando', 'info'], ENCERRADO: ['Encerrado', 'neutro'],
+    INCLUIDO: ['Em aberto', 'info'], ENCERRADO: ['Encerrado', 'neutro'],
 };
 
 function renderPedidos() {
@@ -374,6 +378,9 @@ function renderPedidos() {
             <td class="acoes">
                 ${aberto ? `<button class="btn btn-sm btn-primary" onclick="abrirRecebimento(${p.id})">${ico('package-import')} Receber</button>` : ''}
                 <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">${ico('file-type-pdf')}</button>
+                <button class="btn btn-sm btn-secondary${p.enviado_em ? ' btn-enviado' : ''}" onclick="enviarPedido(${p.id})"
+                    title="${p.enviado_em ? `E-mail aberto em ${dataBR(p.enviado_em)}${p.enviado_por ? ` por ${esc(p.enviado_por)}` : ''} — clique para enviar de novo` : 'Enviar o pedido por e-mail ao fornecedor'}"
+                    aria-label="Enviar pedido por e-mail">${ico('send')}${p.enviado_em ? `<span class="pill ok">${ico('check', 'ico ico-xs')}</span>` : (aberto ? ' Enviar' : '')}</button>
                 ${p.qt_nfs > 0 ? `<button class="btn btn-sm ${p.qt_nfs_a_pagar ? 'btn-attention' : 'btn-secondary'}" onclick="verNfs(${p.id})"
                     title="${p.qt_nfs_a_pagar ? `${p.qt_nfs_a_pagar} NF(s) aguardando pagamento — clique para marcar como paga` : 'Todas as NFs pagas'}"
                     aria-label="Notas fiscais">${ico('file-invoice')} NFs ${p.qt_nfs_a_pagar ? `<span class="pill">${p.qt_nfs_a_pagar} a pagar</span>` : `<span class="pill ok" title="Todas as NFs pagas">${ico('check', 'ico ico-xs')}</span>`}</button>` : ''}
@@ -876,6 +883,8 @@ function rotaAtual() {
             $('fSituacao').value = sit;
             history.replaceState({}, '', '/empenhos'); // o filtro fica aplicado, a URL fica limpa
         }
+        const forn = new URLSearchParams(location.search).get('fornecedor');
+        if (forn) { $('fBusca').value = forn; history.replaceState({}, '', '/empenhos'); }
         voltarLista({ pushUrl: false });
     }
 }
@@ -920,4 +929,142 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.addEventListener('popstate', rotaAtual);
     rotaAtual();
+});
+
+
+// =====================================================================
+// FORNECEDORES no cadastro do empenho (lista para escolher + contato)
+// =====================================================================
+let fornecedoresCache = null;
+async function carregarFornecedores(forcar = false) {
+    if (fornecedoresCache && !forcar) return fornecedoresCache;
+    try { fornecedoresCache = await fetchJSON('/api/fornecedores'); } catch { fornecedoresCache = []; }
+    $('listaFornecedores').innerHTML = fornecedoresCache.map(f => `<option value="${esc(f.nome)}">${f.email ? esc(f.email) : ''}</option>`).join('');
+    return fornecedoresCache;
+}
+const chaveNome = (s) => String(s || '').trim().replace(/\s+/g, ' ').toUpperCase();
+function infoCredor() {
+    const nome = chaveNome($('mCredor').value);
+    const f = nome && (fornecedoresCache || []).find(x => chaveNome(x.nome) === nome);
+    const el = $('credorInfo');
+    if (!nome) { el.innerHTML = ''; return; }
+    if (!f) { el.innerHTML = `Fornecedor novo. Depois, cadastre o contato em <a href="/fornecedores">Fornecedores</a> para poder enviar pedidos por e-mail.`; return; }
+    const partes = [f.email && `${ico('mail', 'ico ico-xs')} ${esc(f.email)}`, f.telefone && `${ico('phone', 'ico ico-xs')} ${esc(f.telefone)}`].filter(Boolean);
+    el.innerHTML = partes.length ? `<span class="credor-contato">${partes.join(' · ')}</span>`
+        : `Sem contato cadastrado. <a href="/fornecedores">Cadastrar em Fornecedores</a>.`;
+}
+
+// =====================================================================
+// ENVIAR PEDIDO POR E-MAIL — modelo de texto fixo; o anexo vai pelo PDF
+// =====================================================================
+const envio = { pid: null, dados: null };
+
+async function enviarPedido(pid) {
+    let d;
+    try { d = await fetchJSON(`/api/pedidos/${pid}/email`); } catch (err) { toast(err.message, 'error'); return; }
+    if (!d.ok) { toast(d.error, 'error'); return; }
+    envio.pid = pid; envio.dados = d;
+    const p = estado.pedidos.find(x => x.id === pid);
+    $('envTitulo').textContent = `Enviar Pedido ${p ? p.numero_pedido : ''} — ${d.fornecedor}`;
+    $('envPara').value = d.para || '';
+    $('envAssunto').value = d.assunto;
+    $('envCorpo').value = d.corpo;
+    const semEmail = !d.para;
+    $('envAviso').hidden = !semEmail;
+    $('envAviso').innerHTML = semEmail
+        ? `${ico('alert-triangle')} <span>${esc(d.fornecedor)} está sem e-mail cadastrado. Digite o e-mail abaixo (ele pode ser salvo no cadastro) ou cadastre em <a href="/fornecedores">Fornecedores</a>.</span>` : '';
+    $('envSalvarBox').hidden = true;
+    $('envSalvar').checked = true;
+    $('envEnviado').textContent = d.enviado_em ? `Último envio preparado em ${dataBR(d.enviado_em)}${d.enviado_por ? ` por ${d.enviado_por}` : ''}.` : '';
+    abrirModal('modalEnviar');
+    setTimeout(() => (semEmail ? $('envPara') : $('envCorpo')).focus(), 40);
+}
+
+function envioCampos() {
+    return { para: $('envPara').value.trim().replace(/\s*[;,]\s*/g, ','), assunto: $('envAssunto').value.trim(), corpo: $('envCorpo').value };
+}
+
+function envioValido() {
+    const { para } = envioCampos();
+    if (!para) { toast('Informe o e-mail do fornecedor', 'error'); $('envPara').focus(); return false; }
+    if (!para.split(',').every(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))) { toast('E-mail inválido', 'error'); $('envPara').focus(); return false; }
+    return true;
+}
+
+async function aposAbrirEmail(meio) {
+    const { para } = envioCampos();
+    // Salva o e-mail digitado no cadastro do fornecedor (quando pedido)
+    if (!$('envSalvarBox').hidden && $('envSalvar').checked && para) {
+        try {
+            const lista = await carregarFornecedores(true);
+            const f = lista.find(x => chaveNome(x.nome) === chaveNome(envio.dados.fornecedor));
+            const corpo = { ...(f || {}), nome: envio.dados.fornecedor, email: para };
+            const r = f && f.id ? await enviarJSON(`/api/fornecedores/${f.id}`, 'PUT', corpo) : await enviarJSON('/api/fornecedores', 'POST', corpo);
+            if (r && r.ok) { toast('E-mail salvo no cadastro do fornecedor', 'success'); envio.dados.para = para; $('envSalvarBox').hidden = true; $('envAviso').hidden = true; }
+        } catch { /* segue sem salvar */ }
+    }
+    try { await enviarJSON(`/api/pedidos/${envio.pid}/email/registrar`, 'POST', { meio, para }); } catch { /* registro é opcional */ }
+    if (estado.empenhoId) abrirDetalhe(estado.empenhoId, { pushUrl: false, rolar: false });
+}
+
+function baixarArquivo(url) {
+    const a = document.createElement('a');
+    a.href = url; a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+}
+
+function abrirGmail() {
+    if (!envioValido()) return;
+    const { para, assunto, corpo } = envioCampos();
+    const q = new URLSearchParams({ view: 'cm', fs: '1', to: para, su: assunto, body: corpo });
+    window.open(`https://mail.google.com/mail/?${q.toString()}`, '_blank', 'noopener');
+    baixarArquivo(`/api/pedidos/${envio.pid}/pdf`);
+    toast('PDF baixado: arraste o arquivo para o e-mail no Gmail', 'success');
+    aposAbrirEmail('gmail');
+}
+
+function abrirMailto() {
+    if (!envioValido()) return;
+    const { para, assunto, corpo } = envioCampos();
+    baixarArquivo(`/api/pedidos/${envio.pid}/pdf`);
+    location.href = `mailto:${para.split(',').map(encodeURIComponent).join(',')}?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(corpo.replace(/\n/g, '\r\n'))}`;
+    toast('PDF baixado: anexe o arquivo ao e-mail', 'success');
+    aposAbrirEmail('mailto');
+}
+
+async function baixarEml() {
+    if (!envioValido()) return;
+    const b = $('envEml'); b.disabled = true;
+    try {
+        const res = await fetch(`/api/pedidos/${envio.pid}/email.eml`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(envioCampos()),
+        });
+        if (!res.ok) throw new Error('Não foi possível gerar o e-mail');
+        const blob = await res.blob();
+        const nome = (/filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') || '') || [])[1] || 'pedido.eml';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast('Arquivo de e-mail baixado: abra-o para enviar (o PDF já está anexado)', 'success');
+        aposAbrirEmail('eml');
+    } catch (err) { toast(err.message, 'error'); }
+    finally { b.disabled = false; }
+}
+
+async function copiarTextoEmail() {
+    const { para, assunto, corpo } = envioCampos();
+    const txt = `Para: ${para}\nAssunto: ${assunto}\n\n${corpo}`;
+    try { await navigator.clipboard.writeText(txt); toast('Texto copiado', 'success'); }
+    catch { $('envCorpo').select(); document.execCommand('copy'); toast('Texto copiado', 'success'); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    $('mCredor').addEventListener('input', infoCredor);
+    $('envGmail').addEventListener('click', abrirGmail);
+    $('envEml').addEventListener('click', baixarEml);
+    $('envMailto').addEventListener('click', abrirMailto);
+    $('envCopiar').addEventListener('click', copiarTextoEmail);
+    $('envPara').addEventListener('input', () => {
+        const mudou = $('envPara').value.trim() && $('envPara').value.trim() !== (envio.dados && envio.dados.para || '');
+        $('envSalvarBox').hidden = !mudou;
+    });
 });

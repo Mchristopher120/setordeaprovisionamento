@@ -15,6 +15,7 @@
     <nav class="topbar-nav" id="navPrincipal" aria-label="Navegação principal">
         <a href="/" class="nav-link {{ 'active' if pagina == 'dashboard' }}" {% if pagina == 'dashboard' %}aria-current="page"{% endif %}>{{ ico('home') }}Dashboard</a>
         <a href="/empenhos" class="nav-link {{ 'active' if pagina == 'empenhos' }}" {% if pagina == 'empenhos' %}aria-current="page"{% endif %}>{{ ico('receipt') }}Empenhos<span class="nav-cont" id="navPend" hidden></span></a>
+        <a href="/fornecedores" class="nav-link {{ 'active' if pagina == 'fornecedores' }}" {% if pagina == 'fornecedores' %}aria-current="page"{% endif %}>{{ ico('truck') }}Fornecedores</a>
         <a href="/historico" class="nav-link {{ 'active' if pagina == 'historico' }}" {% if pagina == 'historico' %}aria-current="page"{% endif %}>{{ ico('history') }}Histórico</a>
     </nav>
 
