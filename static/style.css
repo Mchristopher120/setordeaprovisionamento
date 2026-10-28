@@ -9,11 +9,11 @@
 }
 
 :root {
-    --bg: #f3f5fa;
+    --bg: #e7ebf2;            /* fundo mais escuro que os cards, para separar bem */
     --card: #ffffff;
     --surface-2: #f6f8fc;
-    --border: #e2e7f0;
-    --border-strong: #cfd7e4;
+    --border: #d6dde8;
+    --border-strong: #c3ccda;
     --text: #1f2937;
     --muted: #64708a;
     --primary: #2563eb;
@@ -34,14 +34,14 @@
     --liq-strong: #0d9488;
     --teal-bg: #ccfbf1;
     --slate: #94a3b8;
-    --shadow: 0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
+    --shadow: 0 1px 2px rgba(16,24,40,.07), 0 2px 8px rgba(16,24,40,.06);
     --shadow-hover: 0 6px 18px rgba(16,24,40,.08);
     --radius: 12px;
     --focus: 0 0 0 3px rgba(37,99,235,.28);
     --primary-hover: #1d4ed8;
     --surface-3: #eef1f6;
     --input-bg: #ffffff;
-    --row-hover: #fafbfe;
+    --row-hover: #f5f7fb;
     --skel-a: #eef1f6;
     --skel-b: #f7f9fc;
     --ok-text: #047857;
