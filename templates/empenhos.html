@@ -31,7 +31,7 @@
                 <button id="btnNew" class="btn btn-primary">{{ ico('plus') }} Novo Empenho</button>
             </div>
             <div class="toolbar" role="search">
-                <input type="search" id="fBusca" class="input" placeholder="Buscar por NE, fornecedor ou processo…" aria-label="Buscar">
+                <input type="search" id="fBusca" class="input" placeholder="Buscar NE, fornecedor, processo ou item…" aria-label="Buscar">
                 <select id="fSituacao" class="input" aria-label="Situação">
                     <option value="">Todas as situações</option>
                     <option value="ANDAMENTO">Em andamento</option>
@@ -149,6 +149,9 @@
                 <input type="text" id="mProcesso" placeholder="Nº do processo (opcional)">
                 <label for="mCredor">Fornecedor *</label>
                 <input type="text" id="mCredor" placeholder="Nome do fornecedor">
+                <label for="mResumo">Resumo dos itens</label>
+                <input type="text" id="mResumo" maxlength="300" placeholder="Automático (gerado a partir dos itens)">
+                <p class="campo-ajuda">Deixe em branco para o sistema montar sozinho a partir das descrições. Se quiser outro texto, escreva separando por vírgula (ex.: batata, cebola, trigo).</p>
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" data-close>Cancelar</button>
