@@ -1196,6 +1196,10 @@ def api_pedido_pdf(pid):
     LIGHT = (180, 196, 224)
     pdf.set_fill_color(*NAVY)
     pdf.rect(0, 0, 210, 30, "F")
+    # Brasão do 3º CGEO à esquerda do cabeçalho
+    brasao = os.path.join(BASE_DIR, "static", "img", "3cgeo.png")
+    if os.path.exists(brasao):
+        pdf.image(brasao, x=14, y=2.5, h=25)
     pdf.set_text_color(255, 255, 255)
     pdf.set_y(4.5)
     pdf.set_font("ArialU", "B", 9)

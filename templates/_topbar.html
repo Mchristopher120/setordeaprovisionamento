@@ -1,6 +1,10 @@
 <header class="topbar">
     <div class="brand">
+        {% if logo_img %}
+        <img class="logo-img" src="{{ url_for('static', filename=logo_img) }}" alt="{{ logo_alt or '' }}" width="78" height="40">
+        {% else %}
         <span class="logo">{{ icone }}</span>
+        {% endif %}
         <div>
             <h1>{{ titulo }}</h1>
             <p class="sub">{{ subtitulo }}</p>
@@ -11,6 +15,7 @@
         <a href="/empenhos" class="nav-link {{ 'active' if pagina == 'empenhos' }}" {% if pagina == 'empenhos' %}aria-current="page"{% endif %}>📦 Empenhos</a>
         <a href="/historico" class="nav-link {{ 'active' if pagina == 'historico' }}" {% if pagina == 'historico' %}aria-current="page"{% endif %}>🕘 Histórico</a>
         <a href="/api/exportar.xlsx" class="nav-link" title="Baixar planilha Excel com todos os dados">⬇ Excel</a>
+        <button type="button" id="btnTema" class="nav-link btn-tema">🖥️ <span class="tema-rotulo">Automático</span></button>
         {% if auth_ativa %}
         <span class="nav-user" title="Conectado como {{ usuario }}">👤 {{ usuario }}</span>
         <a href="/logout" class="nav-link">Sair</a>

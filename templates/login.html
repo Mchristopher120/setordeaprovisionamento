@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Entrar — Aprovisionamento</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='tema.js') }}"></script>
 </head>
 <body class="auth-body">
     <main class="auth-card">
-        <span class="auth-logo">⚙</span>
+        <img class="auth-logo-img" src="{{ url_for('static', filename='img/logistica.png') }}" alt="Logística do Exército Brasileiro" width="120" height="62">
         <h1>Aprovisionamento</h1>
         {% if sem_senha %}
             <p class="muted">O sistema está bloqueado porque nenhuma senha foi configurada.</p>

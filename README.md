@@ -33,6 +33,7 @@ Após 5 senhas erradas em 15 minutos, o acesso daquele endereço fica bloqueado 
    - **Pagamento**: número da OB, data e valor (até o que está liquidado).
 3. **🕘 Histórico** mostra quem fez cada alteração. A aba **Lixeira** permite restaurar exclusões.
 4. **⬇ Excel** baixa uma planilha com empenhos, itens, pedidos, NFs e pagamentos.
+5. **Tema**: o botão 🖥️/🌙/☀️ no topo alterna entre automático (segue o sistema), escuro e claro. A escolha fica salva no navegador.
 
 ## Regras do sistema
 - **Saldo físico** = qtde empenhada − recebido.
@@ -68,6 +69,8 @@ static/empenhos.js  # tela de empenhos
 static/historico.js # histórico e lixeira
 static/style.css
 static/fonts/       # fontes do PDF (DejaVu Sans)
+static/img/         # folha de acanto (Logística) e brasão do 3º CGEO (PDF)
+static/tema.js      # tema claro/escuro
 INICIAR.bat         # inicializador local
 vercel.json         # configuração de deploy
 ```
