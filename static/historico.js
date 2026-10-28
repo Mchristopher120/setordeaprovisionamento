@@ -7,6 +7,7 @@ const ACAO_ROTULO = {
     RESTAURAR: ['restore', 'Restaurou', 'ok'], RECEBER: ['package-import', 'Recebeu NF', 'ok'], PAGAR: ['cash', 'NF paga', 'ok'],
     ENCERRAR: ['lock', 'Encerrou', 'atencao'], REFORCO: ['plus', 'Reforço', 'ok'], ANULACAO: ['plus-minus', 'Anulação', 'atencao'],
     LOGIN: ['key', 'Entrou', 'neutro'], DESFAZER: ['arrow-back-up', 'Desfez pagamento', 'atencao'], EXPORTAR: ['download', 'Exportou', 'neutro'],
+    IMPORTAR: ['file-upload', 'Importou', 'info'],
 };
 const TIPO_ROTULO = { empenho: ['receipt', 'Empenho'], item: ['file-text', 'Item'], pedido: ['clipboard-list', 'Pedido'], nf: ['file-invoice', 'NF'], pagamento: ['cash', 'Pagamento'] };
 

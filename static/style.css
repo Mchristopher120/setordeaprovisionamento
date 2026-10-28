@@ -931,3 +931,38 @@ td.acoes .btn-sm .ico { width: 18px; height: 18px; }
 /* Links dentro das tabelas (ex.: NE no histórico) com a cor do sistema */
 tbody td a:not(.btn) { color: var(--primary-dark); font-weight: 600; text-decoration: none; }
 tbody td a:not(.btn):hover { text-decoration: underline; }
+
+/* ---------- Importar planilha ---------- */
+.import-form { display: flex; gap: 14px; align-items: stretch; flex-wrap: wrap; }
+.dropzone {
+    flex: 1 1 320px; display: flex; align-items: center; gap: 14px; cursor: pointer;
+    padding: 18px 20px; border: 2px dashed var(--border-strong); border-radius: var(--radius);
+    background: var(--surface-2); transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.arrastando { border-color: var(--primary); background: var(--primary-bg); }
+.dropzone:focus-within { box-shadow: var(--focus); }
+.dropzone input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.dropzone-ico .ico { width: 30px; height: 30px; color: var(--primary); }
+.dropzone-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dropzone-txt strong { overflow-wrap: anywhere; }
+.import-form .btn { align-self: center; }
+.import-passos { margin: 16px 0 0; padding-left: 20px; line-height: 1.7; }
+.import-msg {
+    display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 18px; margin: 20px 0; font-size: 14px; background: var(--card);
+}
+.import-msg > div { flex: 1 1 300px; }
+.import-msg > .ico { width: 22px; height: 22px; flex: none; margin-top: 1px; }
+.import-msg strong { display: block; margin-bottom: 2px; }
+.import-msg.ok { background: var(--green-bg); border-color: var(--ok-border); color: var(--ok-text); }
+.import-msg.info { background: var(--primary-bg); border-color: var(--sec-border-hover); }
+.import-msg.info > .ico { color: var(--primary); }
+.import-msg.erro { background: var(--red-bg); border-color: var(--err-border); color: var(--err-text); }
+.import-msg.aviso { background: var(--amber-bg); border-color: var(--amber); color: var(--warn-text); }
+.lista-erros { margin: 8px 0 0; padding-left: 18px; line-height: 1.6; }
+#resultado tfoot td {
+    padding: 12px; text-align: center; font-size: 13.5px; font-variant-numeric: tabular-nums;
+    border-top: 2px solid var(--border-strong); background: var(--surface-2);
+}
+#resultado tfoot td.text-left { text-align: left; padding-left: 16px; }
