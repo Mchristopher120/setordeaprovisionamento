@@ -252,6 +252,11 @@ SCHEMA = [
     f"""CREATE TABLE IF NOT EXISTS lixeira (
         id {PK}, quando TEXT, usuario TEXT, tipo TEXT, descricao TEXT,
         empenho_id INTEGER, dados TEXT, restaurado INTEGER DEFAULT 0)""",
+    # FORNECEDORES: contato para enviar pedidos. O empenho guarda o nome
+    # (nome_credor); o vínculo é pelo nome, sem FK, como já era.
+    f"""CREATE TABLE IF NOT EXISTS fornecedores (
+        id {PK}, nome TEXT, cnpj TEXT, email TEXT, telefone TEXT, contato TEXT,
+        observacoes TEXT, criado_em TEXT)""",
     f"""CREATE TABLE IF NOT EXISTS login_falhas (
         id {PK}, ip TEXT, quando TEXT)""",
 ]
@@ -265,6 +270,9 @@ COLUNAS_NOVAS = [
     ("recebimentos", "pago_por", "TEXT"),
     # Resumo dos itens escrito à mão (vazio = gerado das descrições)
     ("empenhos", "resumo", "TEXT"),
+    # Quando o e-mail do pedido foi preparado pelo botão "Enviar pedido"
+    ("pedidos", "enviado_em", "TEXT"),
+    ("pedidos", "enviado_por", "TEXT"),
 ]
 
 
@@ -491,6 +499,7 @@ TABELAS_LIXEIRA = [
     ("pedido_itens", {"pedido_id": "pedidos", "item_id": "itens"}),
     ("recebimentos", {"empenho_id": "empenhos", "pedido_id": "pedidos", "item_id": "itens"}),
     ("pagamentos", {"empenho_id": "empenhos"}),
+    ("fornecedores", {}),
 ]
 
 
@@ -502,9 +511,12 @@ def _in(ids):
     return ",".join("?" for _ in ids)
 
 
-def snapshot(db, empenho_id=None, item_id=None, pedido_id=None, recebimento_ids=None, pagamento_id=None):
+def snapshot(db, empenho_id=None, item_id=None, pedido_id=None, recebimento_ids=None, pagamento_id=None,
+             fornecedor_id=None):
     s = {t: [] for t, _ in TABELAS_LIXEIRA}
-    if empenho_id is not None:
+    if fornecedor_id is not None:
+        s["fornecedores"] = _linhas(db, "SELECT * FROM fornecedores WHERE id = ?", (fornecedor_id,))
+    elif empenho_id is not None:
         s["empenhos"] = _linhas(db, "SELECT * FROM empenhos WHERE id = ?", (empenho_id,))
         for t in ("itens", "movimentos_item", "pedidos", "recebimentos", "pagamentos"):
             s[t] = _linhas(db, f"SELECT * FROM {t} WHERE empenho_id = ?", (empenho_id,))
@@ -782,9 +794,11 @@ def api_lista_empenhos():
     db = get_db()
     lista = financeiro_empenhos(db)
     resumo = resumo_pedidos(db)
-    atrasos, vencendo = {}, {}
+    atrasos, vencendo, abertos = {}, {}, {}
     pid_emp = {r["id"]: r["empenho_id"] for r in db.execute("SELECT id, empenho_id FROM pedidos").fetchall()}
     for pid, p in resumo.items():
+        if p["status"] in ("INCLUIDO", "PARCIAL"):
+            abertos[pid_emp.get(pid)] = abertos.get(pid_emp.get(pid), 0) + 1
         if p["atrasado"]:
             atrasos[pid_emp.get(pid)] = atrasos.get(pid_emp.get(pid), 0) + 1
         if p["vencendo"]:
@@ -793,6 +807,7 @@ def api_lista_empenhos():
     for d in lista:
         d["pedidos_atrasados"] = atrasos.get(d["id"], 0)
         d["pedidos_vencendo"] = vencendo.get(d["id"], 0)
+        d["pedidos_em_aberto"] = abertos.get(d["id"], 0)
         d["nfs_a_pagar"] = a_pagar.get(d["id"], (0, 0.0))[0]
     return jsonify(lista)
 
@@ -1284,9 +1299,8 @@ def api_detalhe_pedido(pid):
     })
 
 
-@app.route("/api/pedidos/<int:pid>/pdf", methods=["GET"])
-def api_pedido_pdf(pid):
-    """Gera um PDF do pedido para envio ao fornecedor."""
+def gerar_pdf_pedido(pid):
+    """PDF do pedido para envio ao fornecedor -> (BytesIO, nome do arquivo) ou None."""
     from fpdf import FPDF
 
     def norm(txt):
@@ -1300,7 +1314,7 @@ def api_pedido_pdf(pid):
     db = get_db()
     pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
     if not pedido:
-        return erro("Pedido não encontrado", 404)
+        return None
     empenho = db.execute("SELECT * FROM empenhos WHERE id = ?", (pedido["empenho_id"],)).fetchone()
     itens = db.execute(
         "SELECT pi.qtde_pedida, i.numero_item, i.descricao, i.und, i.valor_unitario"
@@ -1532,6 +1546,15 @@ def api_pedido_pdf(pid):
     pdf.output(buf)
     buf.seek(0)
     nome = re.sub(r"[^A-Za-z0-9._-]+", "_", f"PEDIDO_{pedido['numero_pedido']}_{ne_txt}").strip("_") + ".pdf"
+    return buf, nome
+
+
+@app.route("/api/pedidos/<int:pid>/pdf", methods=["GET"])
+def api_pedido_pdf(pid):
+    r = gerar_pdf_pedido(pid)
+    if r is None:
+        return erro("Pedido não encontrado", 404)
+    buf, nome = r
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=nome)
 
 
@@ -1950,7 +1973,7 @@ def api_exportar():
         {6: QTD, 7: MOEDA, 8: MOEDA, 9: QTD, 10: QTD, 11: QTD, 12: QTD, 13: MOEDA, 14: MOEDA})
 
     resumo = resumo_pedidos(db)
-    st = {"INCLUIDO": "Aguardando", "PARCIAL": "Parcial", "RECEBIDO": "Recebido", "ENCERRADO": "Encerrado"}
+    st = {"INCLUIDO": "Em aberto", "PARCIAL": "Parcial", "RECEBIDO": "Recebido", "ENCERRADO": "Encerrado"}
     peds = db.execute("SELECT * FROM pedidos ORDER BY empenho_id, id").fetchall()
     aba("Pedidos",
         ["NE", "Fornecedor", "Pedido", "Data", "Prazo (dias)", "Vencimento", "Status", "Dias de atraso", "Qtde pedida", "Qtde recebida"],
@@ -1991,6 +2014,256 @@ def api_exportar():
                      download_name=f"aprovisionamento_{date.today().strftime('%Y-%m-%d')}.xlsx",
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+
+
+# ============================================================================
+# FORNECEDORES (contato) e ENVIO DO PEDIDO POR E-MAIL
+# O texto do e-mail é um modelo fixo preenchido com os dados do pedido.
+# ============================================================================
+def chave_nome(nome):
+    return re.sub(r"\s+", " ", str(nome or "")).strip().upper()
+
+
+def fornecedor_por_nome(db, nome):
+    alvo = chave_nome(nome)
+    if not alvo:
+        return None
+    for f in db.execute("SELECT * FROM fornecedores ORDER BY id").fetchall():
+        if chave_nome(f["nome"]) == alvo:
+            return dict(f)
+    return None
+
+
+def _so_digitos(v):
+    return re.sub(r"\D", "", str(v or ""))
+
+
+def _dados_fornecedor(data):
+    nome = chave_nome(data.get("nome"))
+    email = re.sub(r"\s+", "", str(data.get("email") or "")).lower()
+    cnpj = (data.get("cnpj") or "").strip()
+    if not nome:
+        return None, "Informe o nome do fornecedor"
+    for e in [x for x in re.split(r"[;,]", email) if x]:
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
+            return None, f"E-mail inválido: {e}"
+    if cnpj and len(_so_digitos(cnpj)) not in (11, 14):
+        return None, "CNPJ/CPF deve ter 14 (ou 11) dígitos"
+    return {
+        "nome": nome, "cnpj": cnpj, "email": ", ".join(x for x in re.split(r"[;,]", email) if x),
+        "telefone": (data.get("telefone") or "").strip(), "contato": (data.get("contato") or "").strip(),
+        "observacoes": (data.get("observacoes") or "").strip(),
+    }, None
+
+
+@app.route("/fornecedores")
+def pag_fornecedores():
+    return render_template("fornecedores.html")
+
+
+@app.route("/api/fornecedores")
+def api_fornecedores():
+    """Fornecedores cadastrados + nomes que só aparecem nos empenhos (ainda sem contato)."""
+    db = get_db()
+    por_nome = {}
+    for f in db.execute("SELECT * FROM fornecedores ORDER BY nome").fetchall():
+        d = dict(f)
+        d.update(cadastrado=True, empenhos=0, empenhado=0.0, a_liquidar=0.0, pedidos_em_aberto=0)
+        por_nome[chave_nome(f["nome"])] = d
+    abertos = {}
+    resumo = resumo_pedidos(db)
+    for p in db.execute("SELECT id, empenho_id FROM pedidos").fetchall():
+        if resumo.get(p["id"], {}).get("status") in ("INCLUIDO", "PARCIAL"):
+            abertos[p["empenho_id"]] = abertos.get(p["empenho_id"], 0) + 1
+    for e in financeiro_empenhos(db):
+        k = chave_nome(e["nome_credor"])
+        d = por_nome.setdefault(k, {"id": None, "nome": k, "cnpj": "", "email": "", "telefone": "", "contato": "",
+                                    "observacoes": "", "cadastrado": False, "empenhos": 0, "empenhado": 0.0,
+                                    "a_liquidar": 0.0, "pedidos_em_aberto": 0})
+        d["empenhos"] += 1
+        d["empenhado"] += e["valor_empenhado"]
+        d["a_liquidar"] += e["a_liquidar"]
+        d["pedidos_em_aberto"] += abertos.get(e["id"], 0)
+    return jsonify(sorted(por_nome.values(), key=lambda d: d["nome"]))
+
+
+@app.route("/api/fornecedores", methods=["POST"])
+def api_criar_fornecedor():
+    dados, msg = _dados_fornecedor(request.json or {})
+    if msg:
+        return erro(msg)
+    db = get_db()
+    if fornecedor_por_nome(db, dados["nome"]):
+        return erro(f"{dados['nome']} já está cadastrado")
+    cur = db.execute(
+        "INSERT INTO fornecedores (nome, cnpj, email, telefone, contato, observacoes, criado_em) VALUES (?,?,?,?,?,?,?)",
+        (dados["nome"], dados["cnpj"], dados["email"], dados["telefone"], dados["contato"], dados["observacoes"], agora()))
+    registrar(db, "CRIAR", "fornecedor", cur.lastrowid, None, f"Fornecedor {dados['nome']} cadastrado")
+    db.commit()
+    return jsonify({"ok": True, "id": cur.lastrowid})
+
+
+@app.route("/api/fornecedores/<int:fid>", methods=["PUT"])
+def api_editar_fornecedor(fid):
+    dados, msg = _dados_fornecedor(request.json or {})
+    if msg:
+        return erro(msg)
+    db = get_db()
+    f = db.execute("SELECT * FROM fornecedores WHERE id = ?", (fid,)).fetchone()
+    if not f:
+        return erro("Fornecedor não encontrado", 404)
+    outro = fornecedor_por_nome(db, dados["nome"])
+    if outro and outro["id"] != fid:
+        return erro(f"Já existe outro cadastro com o nome {dados['nome']}")
+    db.execute("UPDATE fornecedores SET nome=?, cnpj=?, email=?, telefone=?, contato=?, observacoes=? WHERE id=?",
+               (dados["nome"], dados["cnpj"], dados["email"], dados["telefone"], dados["contato"], dados["observacoes"], fid))
+    renomeados = 0
+    if chave_nome(f["nome"]) != dados["nome"]:
+        # Nome corrigido: leva junto os empenhos que usavam o nome antigo
+        for e in db.execute("SELECT id, nome_credor FROM empenhos").fetchall():
+            if chave_nome(e["nome_credor"]) == chave_nome(f["nome"]):
+                db.execute("UPDATE empenhos SET nome_credor = ? WHERE id = ?", (dados["nome"], e["id"]))
+                renomeados += 1
+    mud = [c for c, k in (("nome", "nome"), ("CNPJ", "cnpj"), ("e-mail", "email"), ("telefone", "telefone"),
+                          ("contato", "contato"), ("observações", "observacoes")) if (f[k] or "") != (dados[k] or "")]
+    registrar(db, "EDITAR", "fornecedor", fid, None,
+              f"Fornecedor {dados['nome']} editado" + (f" ({', '.join(mud)})" if mud else "")
+              + (f"; nome atualizado em {renomeados} empenho(s)" if renomeados else ""))
+    db.commit()
+    return jsonify({"ok": True, "empenhos_renomeados": renomeados})
+
+
+@app.route("/api/fornecedores/<int:fid>", methods=["DELETE"])
+def api_excluir_fornecedor(fid):
+    """Apaga só o cadastro (contato). Os empenhos continuam com o nome."""
+    db = get_db()
+    f = db.execute("SELECT * FROM fornecedores WHERE id = ?", (fid,)).fetchone()
+    if not f:
+        return erro("Fornecedor não encontrado", 404)
+    mandar_para_lixeira(db, "fornecedor", f"Cadastro do fornecedor {f['nome']}", None, snapshot(db, fornecedor_id=fid))
+    db.execute("DELETE FROM fornecedores WHERE id = ?", (fid,))
+    registrar(db, "EXCLUIR", "fornecedor", fid, None, f"Cadastro do fornecedor {f['nome']} enviado para a lixeira")
+    db.commit()
+    return jsonify({"ok": True})
+
+
+def _qtd_txt(v):
+    return f"{float(v):,.3f}".rstrip("0").rstrip(".").replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def montar_email_pedido(db, pid):
+    """Destinatário, assunto e texto do e-mail do pedido (modelo fixo, sem IA)."""
+    pedido = db.execute("SELECT * FROM pedidos WHERE id = ?", (pid,)).fetchone()
+    if not pedido:
+        return None
+    emp = db.execute("SELECT * FROM empenhos WHERE id = ?", (pedido["empenho_id"],)).fetchone()
+    forn = fornecedor_por_nome(db, emp["nome_credor"]) or {}
+    U = UNIDADE_PDF
+    itens = db.execute(
+        "SELECT i.numero_item, i.descricao, i.und, pi.qtde_pedida FROM pedido_itens pi JOIN itens i ON i.id = pi.item_id"
+        " WHERE pi.pedido_id = ? ORDER BY i.id", (pid,)).fetchall()
+    linhas = []
+    for i in itens:
+        nome = resumo_de_itens([i["descricao"]]) or [i["descricao"]]
+        nome = nome[0][:1].upper() + nome[0][1:]
+        num = f"Item {i['numero_item']} – " if (i["numero_item"] or "").strip() else ""
+        linhas.append(f"  • {num}{nome}: {_qtd_txt(i['qtde_pedida'])} {i['und'] or ''}".rstrip())
+    venc = None
+    if pedido["prazo_dias"] and parse_data(pedido["data_pedido"]):
+        venc = parse_data(pedido["data_pedido"]) + timedelta(days=int(pedido["prazo_dias"]))
+    saudacao = f"Prezado(a) {forn['contato']}," if forn.get("contato") else "Prezados(as),"
+    proc = f" (Processo {emp['processo']})" if (emp["processo"] or "").strip() else ""
+    partes = [
+        f"À {emp['nome_credor']}",
+        "",
+        saudacao,
+        "",
+        f"Encaminhamos em anexo o Pedido {pedido['numero_pedido']}, referente à Nota de Empenho {emp['ne']}{proc}, "
+        f"do {U['nome']}.",
+        "",
+        "Itens solicitados:",
+        *linhas,
+        "",
+    ]
+    if venc:
+        partes.append(f"Prazo de entrega: até {venc.strftime('%d/%m/%Y')} ({pedido['prazo_dias']} dias).")
+    partes += [
+        f"Local de entrega: {U['endereco']}.",
+        f"Horário de recebimento: {U['horario']}.",
+        "Na entrega, apresentar a nota fiscal com o número da Nota de Empenho e do pedido.",
+        "",
+        "Pedimos, por gentileza, confirmar o recebimento deste e-mail.",
+        "",
+        "Atenciosamente,",
+        "",
+    ]
+    nome_usuario = session.get("nome")
+    if nome_usuario:
+        partes.append(nome_usuario)
+    partes += [f"{U['setor']} – {U['nome']}", U["email"]]
+    return {
+        "para": forn.get("email") or "",
+        "fornecedor": emp["nome_credor"],
+        "fornecedor_id": forn.get("id"),
+        "assunto": f"Pedido {pedido['numero_pedido']} – Nota de Empenho {emp['ne']} – {U['nome']}",
+        "corpo": "\n".join(partes),
+        "enviado_em": pedido["enviado_em"],
+        "enviado_por": pedido["enviado_por"],
+    }
+
+
+@app.route("/api/pedidos/<int:pid>/email")
+def api_email_pedido(pid):
+    d = montar_email_pedido(get_db(), pid)
+    if d is None:
+        return erro("Pedido não encontrado", 404)
+    return jsonify({"ok": True, **d})
+
+
+@app.route("/api/pedidos/<int:pid>/email/registrar", methods=["POST"])
+def api_registrar_envio(pid):
+    """Marca que o e-mail do pedido foi aberto para envio (o envio em si acontece no e-mail)."""
+    db = get_db()
+    pedido = db.execute("SELECT p.*, e.ne FROM pedidos p JOIN empenhos e ON e.id = p.empenho_id WHERE p.id = ?",
+                        (pid,)).fetchone()
+    if not pedido:
+        return erro("Pedido não encontrado", 404)
+    data = request.json or {}
+    para = re.sub(r"\s+", "", str(data.get("para") or ""))[:200]
+    meio = {"gmail": "Gmail", "eml": "programa de e-mail (com anexo)", "mailto": "programa de e-mail"}.get(data.get("meio"), "e-mail")
+    db.execute("UPDATE pedidos SET enviado_em = ?, enviado_por = ? WHERE id = ?", (agora(), usuario_atual(), pid))
+    registrar(db, "ENVIAR", "pedido", pid, pedido["empenho_id"],
+              f"E-mail do pedido {pedido['numero_pedido']} ({pedido['ne']}) aberto no {meio}" + (f" para {para}" if para else ""))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/pedidos/<int:pid>/email.eml", methods=["POST"])
+def api_email_eml(pid):
+    """Rascunho .eml com o PDF anexado. Outlook/Thunderbird/Mail abrem pronto para enviar."""
+    from email.message import EmailMessage
+    from email.utils import formatdate
+
+    db = get_db()
+    base = montar_email_pedido(db, pid)
+    if base is None:
+        return erro("Pedido não encontrado", 404)
+    data = request.json or {}
+    para = re.sub(r"[\r\n]+", " ", str(data.get("para") if data.get("para") is not None else base["para"])).strip()
+    assunto = re.sub(r"[\r\n]+", " ", str(data.get("assunto") or base["assunto"])).strip()
+    corpo = str(data.get("corpo") or base["corpo"])
+    msg = EmailMessage()
+    msg["X-Unsent"] = "1"  # Outlook abre como rascunho, com o botão Enviar
+    if para:
+        msg["To"] = para
+    msg["Subject"] = assunto
+    msg["Date"] = formatdate(localtime=True)
+    msg.set_content(corpo)
+    buf, nome = gerar_pdf_pedido(pid)
+    msg.add_attachment(buf.getvalue(), maintype="application", subtype="pdf", filename=nome)
+    pedido = db.execute("SELECT numero_pedido FROM pedidos WHERE id = ?", (pid,)).fetchone()
+    arquivo = re.sub(r"[^A-Za-z0-9._-]+", "_", f"Email_Pedido_{pedido['numero_pedido']}").strip("_") + ".eml"
+    return send_file(io.BytesIO(msg.as_bytes()), mimetype="message/rfc822", as_attachment=True, download_name=arquivo)
 
 # ============================================================================
 # IMPORTAÇÃO EM LOTE (planilha Excel) — verifica, mostra a prévia e só grava

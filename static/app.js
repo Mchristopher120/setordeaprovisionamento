@@ -113,7 +113,7 @@ function renderAtencao(s) {
 function renderGraficos(stats, empenhos, evolucao) {
     const sp = stats.status_pedidos || {};
     graficoRosca(document.getElementById('chartStatus'), [
-        { label: 'Aguardando', value: sp.INCLUIDO || 0, color: 'var(--info)' },
+        { label: 'Em aberto', value: sp.INCLUIDO || 0, color: 'var(--info)' },
         { label: 'Parcial', value: sp.PARCIAL || 0, color: 'var(--amber)' },
         { label: 'Recebido', value: sp.RECEBIDO || 0, color: 'var(--green)' },
         { label: 'Encerrado', value: sp.ENCERRADO || 0, color: 'var(--slate)' },

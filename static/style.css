@@ -984,3 +984,53 @@ tbody td a:not(.btn):hover { text-decoration: underline; }
 @media (max-width: 860px) {
     .agrupado .ne-linha { flex-direction: column; gap: 1px; }
 }
+
+/* ---------- Enviar pedido por e-mail ---------- */
+.modal-body textarea.envio-corpo { font-family: inherit; font-size: 13.5px; line-height: 1.5; resize: vertical; min-height: 220px; }
+.envio-aviso {
+    display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; line-height: 1.5;
+    background: var(--amber-bg); color: var(--warn-text); border: 1px solid var(--amber);
+    border-radius: 10px; padding: 10px 12px;
+}
+.envio-aviso[hidden] { display: none; }
+.envio-aviso .ico { flex: none; margin-top: 2px; }
+.envio-aviso a { color: inherit; font-weight: 600; }
+.envio-opcoes { display: grid; gap: 8px; margin-top: 6px; }
+.envio-op {
+    display: flex; align-items: flex-start; gap: 12px; text-align: left; cursor: pointer;
+    font: inherit; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+    transition: border-color .15s, background .15s;
+}
+.envio-op:hover { border-color: var(--primary); background: var(--primary-bg); }
+.envio-op:focus-visible { outline: none; box-shadow: var(--focus); }
+.envio-op:disabled { opacity: .6; cursor: progress; }
+.envio-op strong { display: block; font-size: 14px; margin-bottom: 2px; }
+.envio-op .small { display: block; line-height: 1.45; }
+.envio-op-ico {
+    flex: none; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+    background: var(--card); border: 1px solid var(--border); color: var(--primary);
+}
+.envio-op.destaque { border-color: var(--sec-border-hover); background: var(--primary-bg); }
+.envio-op.destaque .envio-op-ico { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn-enviado { color: var(--ok-text); }
+.btn-enviado .pill { margin-left: 2px; }
+.credor-contato { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.credor-contato .ico-xs, .campo-ajuda .ico-xs { vertical-align: -2px; }
+
+/* ---------- Fornecedores ---------- */
+.forn-nome { font-weight: 600; }
+.forn-sub { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+.forn-contato a { color: var(--primary); text-decoration: none; overflow-wrap: anywhere; }
+.forn-contato a:hover { text-decoration: underline; }
+.forn-contato div + div { margin-top: 3px; }
+.forn-contato .ico { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; color: var(--muted); }
+.sem-contato { color: var(--warn-text); font-size: 12.5px; }
+.modal-body .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.modal-body .grid-2 > div { display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 560px) { .modal-body .grid-2 { grid-template-columns: 1fr; } }
+
+.check[hidden] { display: none; }
+.modal-body label.check { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 500; color: var(--text); font-size: 13.5px; }
+.modal-body label.check[hidden] { display: none; }
+.modal-body .check input { width: auto; padding: 0; margin: 0; accent-color: var(--primary); }

@@ -1,0 +1,88 @@
+{% from '_icones.html' import icone as ico %}<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fornecedores - Aprovisionamento</title>
+    <link rel="icon" href="{{ url_for('static', filename='img/favicon.ico') }}" sizes="any">
+    <link rel="icon" href="{{ url_for('static', filename='img/favicon-64.png') }}" type="image/png">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/apple-touch-icon.png') }}">
+    <link rel="preload" href="{{ url_for('static', filename='fonts/InterVariable.woff2') }}" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='tema.js') }}"></script>
+</head>
+<body>
+    {% set pagina = 'fornecedores' %}
+    {% include '_topbar.html' %}
+
+    <main class="container">
+        <div class="page-head">
+            <div>
+                <h2 class="page-title">Fornecedores</h2>
+                <p class="page-sub">Contatos para enviar pedidos por e-mail</p>
+            </div>
+        </div>
+
+        <section class="card table-card">
+            <div class="table-head">
+                <h3>Fornecedores <span class="count-badge" id="countBadge">0</span></h3>
+                <button id="btnNovo" class="btn btn-primary">{{ ico('plus') }} Novo fornecedor</button>
+            </div>
+            <div class="toolbar">
+                <input type="search" id="fBusca" class="input" placeholder="Buscar nome, CNPJ, e-mail ou telefone…" aria-label="Buscar">
+                <select id="fFiltro" class="input" aria-label="Filtro">
+                    <option value="">Todos</option>
+                    <option value="SEM">Sem e-mail cadastrado</option>
+                    <option value="ABERTO">Com pedido em aberto</option>
+                </select>
+            </div>
+            <div class="table-wrap">
+                <table id="tblForn">
+                    <thead>
+                        <tr>
+                            <th data-key="nome" class="text-left">Fornecedor</th>
+                            <th>Contato</th>
+                            <th data-key="empenhos" data-default="desc">Empenhos</th>
+                            <th data-key="a_liquidar" data-default="desc">A liquidar</th>
+                            <th data-key="pedidos_em_aberto" data-default="desc">Pedidos em aberto</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbodyForn"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div class="modal" id="modalForn">
+        <div role="dialog" aria-modal="true" aria-labelledby="fornTitulo" class="modal-box">
+            <h3 id="fornTitulo">Novo fornecedor</h3>
+            <div class="modal-body">
+                <label for="fNome">Nome *</label>
+                <input type="text" id="fNome" placeholder="Razão social ou nome usado nos empenhos">
+                <p class="campo-ajuda" id="fNomeAjuda" hidden>Ao mudar o nome, os empenhos com o nome antigo são atualizados juntos.</p>
+                <div class="grid-2">
+                    <div><label for="fCnpj">CNPJ</label><input type="text" id="fCnpj" inputmode="numeric" placeholder="00.000.000/0000-00"></div>
+                    <div><label for="fTelefone">Telefone / WhatsApp</label><input type="tel" id="fTelefone" placeholder="(81) 99999-9999"></div>
+                </div>
+                <label for="fEmail">E-mail</label>
+                <input type="text" id="fEmail" placeholder="vendas@fornecedor.com.br (vários: separe por vírgula)">
+                <label for="fContato">Pessoa de contato</label>
+                <input type="text" id="fContato" placeholder="Ex.: Sra. Roberta">
+                <label for="fObs">Observações</label>
+                <input type="text" id="fObs" placeholder="Opcional">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-close>Cancelar</button>
+                <button id="btnSalvar" class="btn btn-primary">Salvar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="{{ url_for('static', filename='icones.js') }}"></script>
+    <script src="{{ url_for('static', filename='ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='fornecedores.js') }}"></script>
+</body>
+</html>
