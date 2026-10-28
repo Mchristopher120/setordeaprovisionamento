@@ -83,4 +83,5 @@ document.addEventListener('DOMContentLoaded', () => {
     ['hBusca', 'hAcao', 'hUsuario'].forEach(id => $(id).addEventListener('input', renderHist));
     if (location.hash === '#lixeira') trocarAba('lixo');
     carregar();
+    fetchJSON('/api/stats_empenhos').then(marcarPendencias).catch(() => { /* contador é opcional */ });
 });

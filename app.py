@@ -396,7 +396,15 @@ def exigir_login():
 
 @app.context_processor
 def contexto_templates():
-    return {"usuario": session.get("nome"), "auth_ativa": auth_ativa()}
+    return {"usuario": session.get("nome"), "auth_ativa": auth_ativa(), "iniciais": iniciais(session.get("nome"))}
+
+
+def iniciais(nome):
+    """'Sgt Silva' -> 'SS'; '1º Tenente Christopher' -> 'TC' (ignora números como 1º, 3º)."""
+    partes = [p for p in re.split(r"\s+", (nome or "").strip()) if p and p[0].isalpha()]
+    if not partes:
+        return "•"
+    return (partes[0][0] + (partes[-1][0] if len(partes) > 1 else "")).upper()
 
 
 def _ip():

@@ -12,7 +12,7 @@
     <script src="{{ url_for('static', filename='tema.js') }}"></script>
 </head>
 <body>
-    {% set pagina = 'dashboard' %}{% set logo_img = 'img/logistica.png' %}{% set logo_alt = 'Logística do Exército Brasileiro' %}{% set titulo = 'Aprovisionamento' %}{% set subtitulo = 'Gestão de Empenhos & Liquidações' %}
+    {% set pagina = 'dashboard' %}
     {% include '_topbar.html' %}
 
     <main class="container">
@@ -25,7 +25,10 @@
         </div>
 
         <div class="page-head">
-            <h2 class="page-title">Visão geral</h2>
+            <div>
+                <h2 class="page-title">Visão geral</h2>
+                <p class="page-sub">Gestão de empenhos e liquidações</p>
+            </div>
             <button id="btnRefresh" class="btn btn-secondary btn-sm" title="Atualizar dados">{{ ico('refresh') }} Atualizar</button>
         </div>
 

@@ -68,6 +68,7 @@ async function carregarLista() {
 }
 
 function renderKpis(s) {
+    marcarPendencias(s);
     $('kpis').innerHTML = `
         <div class="kpi accent"><div class="kpi-label">Empenhos</div><div class="kpi-value">${fmtNum(s.empenhos)}</div><div class="kpi-sub">${fmtNum(s.itens)} itens</div></div>
         <div class="kpi slate"><div class="kpi-label">Empenhado</div><div class="kpi-value">${fmtMoney(s.valor_empenhado)}</div><div class="kpi-sub">A liquidar ${fmtMoneyCurto(s.valor_a_liquidar)}</div></div>
