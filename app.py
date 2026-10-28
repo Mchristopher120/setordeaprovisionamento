@@ -1968,6 +1968,95 @@ def api_exportar():
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+# ============================================================================
+# IMPORTAÇÃO EM LOTE (planilha Excel) — verifica, mostra a prévia e só grava
+# quando confirmado. Tudo ou nada: se algo falhar, nada fica pela metade.
+# ============================================================================
+@app.route("/importar")
+def pag_importar():
+    return render_template("importar.html")
+
+
+@app.route("/api/importar/modelo.xlsx")
+def api_modelo_importacao():
+    from importacao import montar_planilha
+    return send_file(montar_planilha(), as_attachment=True, download_name="modelo_importacao_aprovisionamento.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def _resumo_importacao(empenhos):
+    out = []
+    for e in empenhos:
+        vu = {it["numero"]: it["vu"] for it in e["itens"]}
+        empenhado = sum(it["qtde"] * it["vu"] for it in e["itens"])
+        liquidado = sum(q * vu[k] for p in e["pedidos"] for n in p["nfs"] for k, q in n["itens"].items())
+        pedido = sum(q * vu[k] for p in e["pedidos"] for k, q in p["itens"].items())
+        out.append({
+            "ne": e["ne"], "fornecedor": e["fornecedor"], "processo": e["processo"],
+            "itens": len(e["itens"]), "pedidos": len(e["pedidos"]),
+            "nfs": sum(len(p["nfs"]) for p in e["pedidos"]),
+            "em_aberto": sum(1 for p in e["pedidos"] if not p["nfs"]),
+            "empenhado": round(empenhado, 2), "liquidado": round(liquidado, 2),
+            "saldo_a_pedir": round(empenhado - pedido, 2),
+        })
+    return out
+
+
+@app.route("/api/importar", methods=["POST"])
+def api_importar():
+    """multipart: arquivo=.xlsx, confirmar=1 para gravar (sem ele, só verifica)."""
+    from importacao import ler_planilha
+
+    arq = request.files.get("arquivo")
+    if not arq or not arq.filename:
+        return erro("Escolha a planilha (.xlsx)")
+    conteudo = arq.read()
+    if len(conteudo) > 4 * 1024 * 1024:
+        return erro("Planilha grande demais (máximo 4 MB)")
+    empenhos, erros, avisos = ler_planilha(conteudo, parse_money)
+    db = get_db()
+    existentes = {normalizar_ne_db(r["ne"]): r["ne"] for r in db.execute("SELECT ne FROM empenhos").fetchall()}
+    for e in empenhos:
+        if e["ne"] in existentes:
+            erros.append(f"Empenho {e['ne']} já está cadastrado no sistema. Tire da planilha ou apague o existente antes.")
+    resumo = _resumo_importacao(empenhos)
+    if not empenhos and not erros:
+        erros.append("A planilha não tem nenhum empenho preenchido.")
+    if erros or request.form.get("confirmar") != "1":
+        return jsonify({"ok": not erros, "gravado": False, "erros": erros, "avisos": avisos, "empenhos": resumo})
+
+    try:
+        for e in empenhos:
+            eid = db.execute("INSERT INTO empenhos (ne, processo, nome_credor, criado_em) VALUES (?,?,?,?)",
+                             (e["ne"], e["processo"], e["fornecedor"], agora())).lastrowid
+            ids = {it["numero"]: _inserir_item(db, eid, it["numero"], it["descricao"], it["und"], it["qtde"], it["vu"])
+                   for it in e["itens"]}
+            for p in e["pedidos"]:
+                pid = db.execute(
+                    "INSERT INTO pedidos (empenho_id, numero_pedido, data_pedido, observacoes, criado_em, prazo_dias, encerrado)"
+                    " VALUES (?,?,?,?,?,?,0)", (eid, p["numero"], p["data"], p["obs"], agora(), p["prazo"])).lastrowid
+                for num, q in p["itens"].items():
+                    db.execute("INSERT INTO pedido_itens (pedido_id, item_id, qtde_pedida) VALUES (?,?,?)", (pid, ids[num], q))
+                for n in p["nfs"]:
+                    for num, q in n["itens"].items():
+                        db.execute(
+                            "INSERT INTO recebimentos (empenho_id, pedido_id, item_id, nf, data_recebimento, qtde_recebida, observacoes, criado_em)"
+                            " VALUES (?,?,?,?,?,?,?,?)", (eid, pid, ids[num], n["nf"], n["data"], q, "", agora()))
+            r = next(x for x in resumo if x["ne"] == e["ne"])
+            registrar(db, "IMPORTAR", "empenho", eid, eid,
+                      f"Empenho {e['ne']} ({e['fornecedor']}) importado da planilha: {r['itens']} item(ns), "
+                      f"{r['pedidos']} pedido(s), {r['nfs']} NF(s) — empenhado {fmt_brl(r['empenhado'])}")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return jsonify({"ok": True, "gravado": True, "erros": [], "avisos": avisos, "empenhos": resumo})
+
+
+def normalizar_ne_db(ne):
+    return re.sub(r"\s+", "", str(ne or "")).upper()
+
+
 # Cria/atualiza o schema automaticamente (no Vercel o __main__ não roda;
 # o app é importado pelo runtime).
 try:
