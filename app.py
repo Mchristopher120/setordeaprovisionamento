@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -257,6 +258,21 @@ SCHEMA = [
     f"""CREATE TABLE IF NOT EXISTS fornecedores (
         id {PK}, nome TEXT, cnpj TEXT, email TEXT, telefone TEXT, contato TEXT,
         observacoes TEXT, criado_em TEXT)""",
+    # ESTOQUE: catálogo de produtos (cada item de empenho aponta para um produto),
+    # movimentos manuais (inventário inicial, saída/consumo, ajuste) e parâmetros.
+    # As ENTRADAS não ficam aqui: vêm das NFs (recebimentos) dos itens ligados.
+    f"""CREATE TABLE IF NOT EXISTS produtos (
+        id {PK}, nome TEXT, und TEXT, categoria TEXT, vida_util_dias INTEGER,
+        prazo_dias {REAL}, nivel_servico {REAL}, custo_pedido {REAL}, taxa_manutencao {REAL},
+        observacoes TEXT, ativo INTEGER DEFAULT 1, criado_em TEXT)""",
+    f"""CREATE TABLE IF NOT EXISTS estoque_mov (
+        id {PK},
+        produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+        tipo TEXT, data TEXT, qtde {REAL} DEFAULT 0, observacoes TEXT,
+        criado_em TEXT, usuario TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_emov_produto ON estoque_mov(produto_id)",
+    f"""CREATE TABLE IF NOT EXISTS config (
+        id {PK}, chave TEXT, valor TEXT)""",
     f"""CREATE TABLE IF NOT EXISTS login_falhas (
         id {PK}, ip TEXT, quando TEXT)""",
 ]
@@ -273,6 +289,8 @@ COLUNAS_NOVAS = [
     # Quando o e-mail do pedido foi preparado pelo botão "Enviar pedido"
     ("pedidos", "enviado_em", "TEXT"),
     ("pedidos", "enviado_por", "TEXT"),
+    # Produto do estoque a que o item de empenho pertence
+    ("itens", "produto_id", "INTEGER"),
 ]
 
 
@@ -500,6 +518,8 @@ TABELAS_LIXEIRA = [
     ("recebimentos", {"empenho_id": "empenhos", "pedido_id": "pedidos", "item_id": "itens"}),
     ("pagamentos", {"empenho_id": "empenhos"}),
     ("fornecedores", {}),
+    ("produtos", {}),
+    ("estoque_mov", {"produto_id": "produtos"}),
 ]
 
 
@@ -512,9 +532,12 @@ def _in(ids):
 
 
 def snapshot(db, empenho_id=None, item_id=None, pedido_id=None, recebimento_ids=None, pagamento_id=None,
-             fornecedor_id=None):
+             fornecedor_id=None, produto_id=None):
     s = {t: [] for t, _ in TABELAS_LIXEIRA}
-    if fornecedor_id is not None:
+    if produto_id is not None:
+        s["produtos"] = _linhas(db, "SELECT * FROM produtos WHERE id = ?", (produto_id,))
+        s["estoque_mov"] = _linhas(db, "SELECT * FROM estoque_mov WHERE produto_id = ?", (produto_id,))
+    elif fornecedor_id is not None:
         s["fornecedores"] = _linhas(db, "SELECT * FROM fornecedores WHERE id = ?", (fornecedor_id,))
     elif empenho_id is not None:
         s["empenhos"] = _linhas(db, "SELECT * FROM empenhos WHERE id = ?", (empenho_id,))
@@ -937,6 +960,12 @@ def _inserir_item(db, eid, numero_item, descricao, und, qtde, vu):
         " VALUES (?,?,?,?,?,?,?,?)",
         (eid, numero_item, descricao, und, qtde, vu, qtde * vu, agora()),
     )
+    # Já liga ao produto do estoque quando existe um com o mesmo nome curto e unidade
+    nome = resumo_de_itens([descricao])
+    if nome:
+        pid = _produto_igual(db, nome[0], und)
+        if pid:
+            db.execute("UPDATE itens SET produto_id = ? WHERE id = ?", (pid, cur.lastrowid))
     return cur.lastrowid
 
 
@@ -1801,6 +1830,10 @@ def api_restaurar(lid):
         return erro("Nada pôde ser restaurado: o empenho/pedido ao qual isso pertencia não existe mais. "
                     "Restaure-o primeiro.")
     db.execute("UPDATE lixeira SET restaurado = 1 WHERE id = ?", (lid,))
+    # Produto restaurado volta a ser o produto dos itens de empenho que eram dele
+    for antigo, novo in mapa.get("produtos", {}).items():
+        for iid in (dados.get("_vinculos") or {}).get(str(antigo), []):
+            db.execute("UPDATE itens SET produto_id = ? WHERE id = ? AND produto_id IS NULL", (novo, iid))
     novo_eid = mapa["empenhos"].get(reg["empenho_id"], reg["empenho_id"])
     if novo_eid != reg["empenho_id"]:
         # o histórico do empenho acompanha o registro restaurado
@@ -2264,6 +2297,417 @@ def api_email_eml(pid):
     pedido = db.execute("SELECT numero_pedido FROM pedidos WHERE id = ?", (pid,)).fetchone()
     arquivo = re.sub(r"[^A-Za-z0-9._-]+", "_", f"Email_Pedido_{pedido['numero_pedido']}").strip("_") + ".eml"
     return send_file(io.BytesIO(msg.as_bytes()), mimetype="message/rfc822", as_attachment=True, download_name=arquivo)
+
+# ============================================================================
+# ESTOQUE — curva ABC, lote econômico (LEC), estoque de segurança (ES) e
+# ponto de pedido (PP). Contas em estoque.py; aqui ficam os dados e as rotas.
+#   Entrada  = NF recebida de um item de empenho ligado ao produto
+#   Saída    = consumo lançado à mão (diário ou semanal)
+#   Inicial  = inventário de abertura; Ajuste = contagem/perda (+ ou −)
+# ============================================================================
+TIPOS_MOV = {"INICIAL": "Inventário inicial", "SAIDA": "Saída (consumo)", "AJUSTE": "Ajuste / contagem"}
+CONFIG_ESTOQUE = ("custo_pedido", "taxa_manutencao", "nivel_servico", "periodo_dias", "prazo_padrao_dias",
+                  "limite_a", "limite_b")
+
+
+def config_estoque(db):
+    from estoque import PADROES
+    cfg = dict(PADROES)
+    for r in db.execute("SELECT chave, valor FROM config").fetchall():
+        k = r["chave"]
+        if k.startswith("estoque.") and k[8:] in cfg:
+            try:
+                cfg[k[8:]] = float(r["valor"])
+            except (TypeError, ValueError):
+                pass
+    cfg["periodo_dias"] = int(cfg["periodo_dias"])
+    return cfg
+
+
+def _hoje():
+    return datetime.now().date()
+
+
+def _num_ou_none(v):
+    if v is None or str(v).strip() == "":
+        return None
+    n = parse_money(v) if isinstance(v, str) else float(v)
+    return n
+
+
+def dados_estoque(db, produto_ids=None):
+    """Calcula tudo de todos os produtos (ou de alguns). Devolve (lista, cfg)."""
+    from estoque import calcular_produto, curva_abc, estatistica_consumo, estatistica_prazo
+
+    cfg = config_estoque(db)
+    hoje = _hoje()
+    produtos = [dict(r) for r in db.execute("SELECT * FROM produtos ORDER BY nome").fetchall()]
+    itens = {}
+    for r in db.execute(SQL_ITENS + " WHERE i.produto_id IS NOT NULL ORDER BY i.id").fetchall():
+        it = completar_item(r)
+        itens.setdefault(it["produto_id"], []).append(it)
+    emp = {r["id"]: dict(r) for r in db.execute("SELECT id, ne, nome_credor FROM empenhos").fetchall()}
+    movs = {}
+    for r in db.execute("SELECT * FROM estoque_mov ORDER BY data, id").fetchall():
+        movs.setdefault(r["produto_id"], []).append(dict(r))
+    entradas = {}
+    for r in db.execute(
+            "SELECT r.item_id, r.pedido_id, r.qtde_recebida, r.data_recebimento, p.data_pedido, i.produto_id"
+            " FROM recebimentos r JOIN itens i ON i.id = r.item_id JOIN pedidos p ON p.id = r.pedido_id"
+            " WHERE i.produto_id IS NOT NULL").fetchall():
+        entradas.setdefault(r["produto_id"], []).append(dict(r))
+
+    out = []
+    for p in produtos:
+        pid = p["id"]
+        its = itens.get(pid, [])
+        ms = movs.get(pid, [])
+        ens = entradas.get(pid, [])
+        total_ent = sum(float(e["qtde_recebida"] or 0) for e in ens)
+        inicial = sum(float(m["qtde"] or 0) for m in ms if m["tipo"] == "INICIAL")
+        saidas = sum(float(m["qtde"] or 0) for m in ms if m["tipo"] == "SAIDA")
+        ajustes = sum(float(m["qtde"] or 0) for m in ms if m["tipo"] == "AJUSTE")
+        saldo = inicial + total_ent - saidas + ajustes
+        # consumo: saídas lançadas; o período começa no 1º lançamento manual do produto
+        datas_mov = [m["data"] for m in ms if m["data"]]
+        cons = estatistica_consumo([(m["data"], m["qtde"]) for m in ms if m["tipo"] == "SAIDA" and m["data"]],
+                                   hoje, cfg["periodo_dias"], min(datas_mov) if datas_mov else None)
+        # prazo real: da data do pedido até a 1ª NF daquele pedido (entregas no mesmo dia não contam)
+        primeira = {}
+        for e in ens:
+            dp, dr = parse_data(e["data_pedido"]), parse_data(e["data_recebimento"])
+            if dp and dr:
+                k = e["pedido_id"]
+                dias = (dr - dp).days
+                primeira[k] = min(primeira.get(k, dias), dias)
+        prazos = [d for d in primeira.values() if d > 0]
+        if p.get("prazo_dias"):
+            pz = {"prazo": float(p["prazo_dias"]), "desvio_prazo": 0.0, "entregas": len(prazos), "origem": "manual"}
+        else:
+            pz = estatistica_prazo(prazos, cfg["prazo_padrao_dias"])
+        recente = max(its, key=lambda i: (i["empenho_id"], i["id"])) if its else None
+        custo = float(recente["valor_unitario"] or 0) if recente else 0.0
+        calc = calcular_produto({
+            "media_diaria": cons["media_diaria"], "desvio_diario": cons["desvio_diario"],
+            "prazo": pz["prazo"], "desvio_prazo": pz["desvio_prazo"], "custo_unitario": custo, "saldo": saldo,
+            "vida_util_dias": p.get("vida_util_dias"), "nivel_servico": p.get("nivel_servico"),
+            "custo_pedido": p.get("custo_pedido"), "taxa_manutencao": p.get("taxa_manutencao"),
+        }, cfg)
+        a_pedir = sum(i["saldo_a_pedir"] for i in its)
+        unds = sorted({(i["und"] or "").strip().upper() for i in its if (i["und"] or "").strip()})
+        out.append({
+            **p, **cons, **pz, **calc,
+            "saldo": saldo, "entradas": total_ent, "saidas": saidas, "ajustes": ajustes, "inicial": inicial,
+            "custo_unitario": custo, "valor_estoque": max(0.0, saldo) * custo,
+            "saldo_empenho": a_pedir,
+            "itens_vinculados": len(its),
+            "und_divergente": [u for u in unds if u != (p["und"] or "").strip().upper()],
+            "empenhos": sorted({emp[i["empenho_id"]]["ne"] for i in its if i["empenho_id"] in emp}),
+            "fornecedores": sorted({emp[i["empenho_id"]]["nome_credor"] for i in its if i["empenho_id"] in emp}),
+            "sugestao_compra": (math.ceil(calc["lec"]) if calc["lec"] else None),
+        })
+    abc = curva_abc([{"id": p["id"], "valor_anual": p["valor_anual"]} for p in out], cfg["limite_a"], cfg["limite_b"])
+    for p in out:
+        p["classe"], p["participacao"], p["acumulado"] = abc.get(p["id"], ("C", 0.0, 0.0))
+    if produto_ids is not None:
+        out = [p for p in out if p["id"] in produto_ids]
+    return out, cfg
+
+
+@app.route("/estoque")
+def pag_estoque():
+    return render_template("estoque.html")
+
+
+@app.route("/api/estoque")
+def api_estoque():
+    db = get_db()
+    lista, cfg = dados_estoque(db)
+    sem_vinculo = db.execute("SELECT COUNT(*) as n FROM itens WHERE produto_id IS NULL").fetchone()["n"]
+    resumo = {
+        "produtos": len(lista),
+        "valor_estoque": round(sum(p["valor_estoque"] for p in lista), 2),
+        "pedir": sum(1 for p in lista if p["situacao"] == "PEDIR"),
+        "criticos": sum(1 for p in lista if p["situacao"] == "CRITICO"),
+        "sem_consumo": sum(1 for p in lista if p["situacao"] == "SEM_CONSUMO"),
+        "classes": {c: sum(1 for p in lista if p["classe"] == c) for c in "ABC"},
+        "valor_anual": round(sum(p["valor_anual"] for p in lista), 2),
+        "itens_sem_produto": sem_vinculo,
+    }
+    return jsonify({"produtos": lista, "config": cfg, "resumo": resumo, "hoje": _hoje().isoformat()})
+
+
+@app.route("/api/estoque/config", methods=["PUT"])
+def api_estoque_config():
+    from estoque import PADROES
+    data = request.json or {}
+    db = get_db()
+    novos, mud = {}, []
+    atual = config_estoque(db)
+    limites = {"custo_pedido": (0, 1e7), "taxa_manutencao": (0.1, 500), "nivel_servico": (50, 99.99),
+               "periodo_dias": (14, 730), "prazo_padrao_dias": (0, 365), "limite_a": (1, 99), "limite_b": (2, 99.99)}
+    for k in CONFIG_ESTOQUE:
+        if k not in data:
+            continue
+        v = _num_ou_none(data[k])
+        if v is None:
+            v = PADROES[k]
+        lo, hi = limites[k]
+        if not (lo <= v <= hi):
+            return erro(f"Valor fora do intervalo para {k.replace('_', ' ')} ({lo:g} a {hi:g})")
+        novos[k] = v
+    a = novos.get("limite_a", atual["limite_a"])
+    b = novos.get("limite_b", atual["limite_b"])
+    if a >= b:
+        return erro("O limite da classe A precisa ser menor que o da classe B")
+    for k, v in novos.items():
+        if abs(float(atual[k]) - v) > 1e-9:
+            mud.append(f"{k}: {atual[k]:g} → {v:g}")
+        chave = f"estoque.{k}"
+        if db.execute("SELECT id FROM config WHERE chave = ?", (chave,)).fetchone():
+            db.execute("UPDATE config SET valor = ? WHERE chave = ?", (str(v), chave))
+        else:
+            db.execute("INSERT INTO config (chave, valor) VALUES (?,?)", (chave, str(v)))
+    if mud:
+        registrar(db, "EDITAR", "estoque", None, None, "Parâmetros do estoque: " + "; ".join(mud))
+    db.commit()
+    return jsonify({"ok": True, "config": config_estoque(db)})
+
+
+def _dados_produto(data):
+    nome = re.sub(r"\s+", " ", str(data.get("nome") or "")).strip()
+    und = re.sub(r"\s+", " ", str(data.get("und") or "")).strip().upper()
+    if not nome:
+        return None, "Informe o nome do produto"
+    if not und:
+        return None, "Informe a unidade (ex.: KG)"
+    d = {"nome": nome[:1].upper() + nome[1:], "und": und,
+         "categoria": (data.get("categoria") or "").strip(), "observacoes": (data.get("observacoes") or "").strip()}
+    for k, lo, hi in (("vida_util_dias", 1, 3650), ("prazo_dias", 0, 365), ("nivel_servico", 50, 99.99),
+                      ("custo_pedido", 0, 1e7), ("taxa_manutencao", 0.1, 500)):
+        v = _num_ou_none(data.get(k))
+        if v is not None and not (lo <= v <= hi):
+            return None, f"Valor fora do intervalo em {k.replace('_', ' ')} ({lo:g} a {hi:g})"
+        d[k] = int(v) if (v is not None and k == "vida_util_dias") else v
+    return d, None
+
+
+def _produto_igual(db, nome, und, ignorar=None):
+    alvo = (chave_nome(nome), (und or "").strip().upper())
+    for r in db.execute("SELECT id, nome, und FROM produtos").fetchall():
+        if r["id"] != ignorar and (chave_nome(r["nome"]), (r["und"] or "").strip().upper()) == alvo:
+            return r["id"]
+    return None
+
+
+def _inserir_produto(db, d):
+    return db.execute(
+        "INSERT INTO produtos (nome, und, categoria, vida_util_dias, prazo_dias, nivel_servico, custo_pedido,"
+        " taxa_manutencao, observacoes, ativo, criado_em) VALUES (?,?,?,?,?,?,?,?,?,1,?)",
+        (d["nome"], d["und"], d.get("categoria", ""), d.get("vida_util_dias"), d.get("prazo_dias"),
+         d.get("nivel_servico"), d.get("custo_pedido"), d.get("taxa_manutencao"), d.get("observacoes", ""), agora()),
+    ).lastrowid
+
+
+@app.route("/api/estoque/produtos", methods=["POST"])
+def api_criar_produto():
+    d, msg = _dados_produto(request.json or {})
+    if msg:
+        return erro(msg)
+    db = get_db()
+    if _produto_igual(db, d["nome"], d["und"]):
+        return erro(f"Já existe o produto {d['nome']} ({d['und']})")
+    pid = _inserir_produto(db, d)
+    registrar(db, "CRIAR", "produto", pid, None, f"Produto {d['nome']} ({d['und']}) cadastrado no estoque")
+    db.commit()
+    return jsonify({"ok": True, "id": pid})
+
+
+@app.route("/api/estoque/produtos/<int:pid>", methods=["PUT"])
+def api_editar_produto(pid):
+    d, msg = _dados_produto(request.json or {})
+    if msg:
+        return erro(msg)
+    db = get_db()
+    p = db.execute("SELECT * FROM produtos WHERE id = ?", (pid,)).fetchone()
+    if not p:
+        return erro("Produto não encontrado", 404)
+    if _produto_igual(db, d["nome"], d["und"], ignorar=pid):
+        return erro(f"Já existe outro produto {d['nome']} ({d['und']})")
+    db.execute("UPDATE produtos SET nome=?, und=?, categoria=?, vida_util_dias=?, prazo_dias=?, nivel_servico=?,"
+               " custo_pedido=?, taxa_manutencao=?, observacoes=? WHERE id=?",
+               (d["nome"], d["und"], d["categoria"], d["vida_util_dias"], d["prazo_dias"], d["nivel_servico"],
+                d["custo_pedido"], d["taxa_manutencao"], d["observacoes"], pid))
+    mud = [k.replace("_", " ") for k in d if (p[k] if p[k] is not None else "") != (d[k] if d[k] is not None else "")]
+    registrar(db, "EDITAR", "produto", pid, None, f"Produto {d['nome']} editado" + (f" ({', '.join(mud)})" if mud else ""))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/estoque/produtos/<int:pid>", methods=["DELETE"])
+def api_excluir_produto(pid):
+    db = get_db()
+    p = db.execute("SELECT * FROM produtos WHERE id = ?", (pid,)).fetchone()
+    if not p:
+        return erro("Produto não encontrado", 404)
+    snap = snapshot(db, produto_id=pid)
+    snap["_vinculos"] = {str(pid): [r["id"] for r in db.execute("SELECT id FROM itens WHERE produto_id = ?", (pid,)).fetchall()]}
+    mandar_para_lixeira(db, "produto", f"Produto {p['nome']} ({p['und']}) e seus lançamentos de estoque", None, snap)
+    db.execute("UPDATE itens SET produto_id = NULL WHERE produto_id = ?", (pid,))
+    db.execute("DELETE FROM estoque_mov WHERE produto_id = ?", (pid,))
+    db.execute("DELETE FROM produtos WHERE id = ?", (pid,))
+    registrar(db, "EXCLUIR", "produto", pid, None, f"Produto {p['nome']} enviado para a lixeira")
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/estoque/produtos/<int:pid>")
+def api_detalhe_produto(pid):
+    db = get_db()
+    lista, cfg = dados_estoque(db, {pid})
+    if not lista:
+        return erro("Produto não encontrado", 404)
+    p = lista[0]
+    movs = [dict(r) | {"origem": "manual"} for r in
+            db.execute("SELECT * FROM estoque_mov WHERE produto_id = ? ORDER BY data DESC, id DESC", (pid,)).fetchall()]
+    for r in db.execute(
+            "SELECT r.id, r.nf, r.data_recebimento, r.qtde_recebida, e.ne, e.nome_credor, e.id as empenho_id,"
+            " p.numero_pedido FROM recebimentos r JOIN itens i ON i.id = r.item_id JOIN empenhos e ON e.id = r.empenho_id"
+            " JOIN pedidos p ON p.id = r.pedido_id WHERE i.produto_id = ?", (pid,)).fetchall():
+        movs.append({"id": None, "tipo": "ENTRADA", "data": r["data_recebimento"], "qtde": r["qtde_recebida"],
+                     "observacoes": f"NF {r['nf']} · {r['numero_pedido']} · {r['ne']} ({r['nome_credor']})",
+                     "empenho_id": r["empenho_id"], "origem": "nf", "usuario": ""})
+    movs.sort(key=lambda m: (m["data"] or "", 1 if m["origem"] == "manual" else 0), reverse=True)
+    itens = [completar_item(r) | {"ne": r["ne"], "fornecedor": r["nome_credor"]} for r in db.execute(
+        SQL_ITENS.replace("FROM itens i", "FROM itens i JOIN empenhos e ON e.id = i.empenho_id").replace(
+            "SELECT i.*,", "SELECT i.*, e.ne, e.nome_credor,") + " WHERE i.produto_id = ? ORDER BY i.empenho_id DESC, i.id",
+        (pid,)).fetchall()]
+    return jsonify({"produto": p, "config": cfg, "movimentos": movs, "itens": itens})
+
+
+@app.route("/api/estoque/movimentos", methods=["POST"])
+def api_lancar_movimentos():
+    """{data, tipo: SAIDA|INICIAL|AJUSTE|CONTAGEM, itens: [{produto_id, qtde, observacoes}]}.
+    CONTAGEM: 'qtde' é o que foi contado; vira um AJUSTE com a diferença para o saldo atual."""
+    data = request.json or {}
+    tipo = str(data.get("tipo") or "SAIDA").upper()
+    if tipo not in ("SAIDA", "INICIAL", "AJUSTE", "CONTAGEM"):
+        return erro("Tipo de lançamento inválido")
+    dt = parse_data(data.get("data")) or _hoje()
+    if dt > _hoje():
+        return erro("A data não pode ser futura")
+    db = get_db()
+    linhas = [x for x in (data.get("itens") or []) if str(x.get("qtde") if x.get("qtde") is not None else "").strip() != ""]
+    if not linhas:
+        return erro("Informe a quantidade de pelo menos um produto")
+    saldos = {}
+    if tipo in ("CONTAGEM", "SAIDA"):
+        saldos = {p["id"]: p["saldo"] for p in dados_estoque(db)[0]}
+    feitos, avisos = [], []
+    for x in linhas:
+        pid = int(x.get("produto_id") or 0)
+        p = db.execute("SELECT id, nome, und FROM produtos WHERE id = ?", (pid,)).fetchone()
+        if not p:
+            return erro("Produto não encontrado")
+        q = _num_ou_none(x.get("qtde"))
+        if q is None:
+            return erro(f"{p['nome']}: quantidade inválida")
+        obs = (x.get("observacoes") or data.get("observacoes") or "").strip()
+        t = tipo
+        if tipo == "CONTAGEM":
+            if q < 0:
+                return erro(f"{p['nome']}: a contagem não pode ser negativa")
+            contado = q
+            q, t = contado - saldos.get(pid, 0.0), "AJUSTE"
+            obs = f"Contagem: {fmt_qtd(contado)} {p['und']}" + (f" · {obs}" if obs else "")
+            if abs(q) < 1e-9:
+                feitos.append(f"{p['nome']}: contagem confere")
+                continue
+        elif tipo in ("SAIDA", "INICIAL") and q <= 0:
+            return erro(f"{p['nome']}: a quantidade deve ser maior que zero")
+        elif tipo == "AJUSTE" and abs(q) < 1e-9:
+            return erro(f"{p['nome']}: ajuste zero")
+        if tipo == "SAIDA" and q > saldos.get(pid, 0.0) + 1e-9:
+            avisos.append(f"{p['nome']}: saída maior que o saldo ({fmt_qtd(saldos.get(pid, 0.0))} {p['und']}). "
+                          "Confira se falta lançar alguma NF ou o inventário inicial.")
+        db.execute("INSERT INTO estoque_mov (produto_id, tipo, data, qtde, observacoes, criado_em, usuario) VALUES (?,?,?,?,?,?,?)",
+                   (pid, t, dt.isoformat(), q, obs, agora(), usuario_atual()))
+        sinal = "+" if q > 0 else ""
+        feitos.append(f"{p['nome']} {'−' if t == 'SAIDA' else sinal}{fmt_qtd(abs(q) if t == 'SAIDA' else q)} {p['und']}")
+    rot = {"SAIDA": "Saída", "INICIAL": "Inventário inicial", "AJUSTE": "Ajuste", "CONTAGEM": "Contagem"}[tipo]
+    registrar(db, "ESTOQUE", "estoque", None, None, f"{rot} em {dt.strftime('%d/%m/%Y')}: " + "; ".join(feitos))
+    db.commit()
+    return jsonify({"ok": True, "lancados": len(feitos), "avisos": avisos})
+
+
+@app.route("/api/estoque/movimentos/<int:mid>", methods=["DELETE"])
+def api_excluir_movimento(mid):
+    db = get_db()
+    m = db.execute("SELECT m.*, p.nome, p.und FROM estoque_mov m JOIN produtos p ON p.id = m.produto_id WHERE m.id = ?",
+                   (mid,)).fetchone()
+    if not m:
+        return erro("Lançamento não encontrado", 404)
+    db.execute("DELETE FROM estoque_mov WHERE id = ?", (mid,))
+    registrar(db, "EXCLUIR", "estoque", mid, None,
+              f"Lançamento apagado: {TIPOS_MOV.get(m['tipo'], m['tipo'])} de {fmt_qtd(m['qtde'])} {m['und']} de "
+              f"{m['nome']} em {data_br(m['data'])}")
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/estoque/vinculos")
+def api_vinculos():
+    """Itens de empenho e seu produto (ou a sugestão de produto pelo nome curto + unidade)."""
+    db = get_db()
+    produtos = [dict(r) for r in db.execute("SELECT id, nome, und FROM produtos ORDER BY nome").fetchall()]
+    por_chave = {(chave_nome(p["nome"]), (p["und"] or "").upper()): p for p in produtos}
+    out = []
+    for r in db.execute("SELECT i.id, i.numero_item, i.descricao, i.und, i.valor_unitario, i.produto_id, e.ne, e.nome_credor"
+                        " FROM itens i JOIN empenhos e ON e.id = i.empenho_id ORDER BY e.ne, i.id").fetchall():
+        nome = resumo_de_itens([r["descricao"]])
+        nome = (nome[0][:1].upper() + nome[0][1:]) if nome else (r["descricao"] or "")[:40]
+        und = (r["und"] or "").strip().upper()
+        sug = por_chave.get((chave_nome(nome), und))
+        out.append({**dict(r), "sugestao_nome": nome, "sugestao_und": und,
+                    "sugestao_produto_id": sug["id"] if sug else None})
+    return jsonify({"itens": out, "produtos": produtos})
+
+
+@app.route("/api/estoque/vinculos", methods=["POST"])
+def api_salvar_vinculos():
+    """{vinculos: [{item_id, produto_id} | {item_id, novo: {nome, und}} | {item_id, produto_id: null}]}"""
+    data = request.json or {}
+    db = get_db()
+    criados, ligados, soltos = {}, 0, 0
+    for v in data.get("vinculos") or []:
+        iid = int(v.get("item_id") or 0)
+        if not db.execute("SELECT 1 as x FROM itens WHERE id = ?", (iid,)).fetchone():
+            continue
+        pid = v.get("produto_id")
+        if v.get("novo"):
+            d, msg = _dados_produto(v["novo"])
+            if msg:
+                return erro(msg)
+            pid = _produto_igual(db, d["nome"], d["und"])
+            if not pid:
+                pid = _inserir_produto(db, d)
+                criados[pid] = d["nome"]
+        if pid:
+            if not db.execute("SELECT 1 as x FROM produtos WHERE id = ?", (int(pid),)).fetchone():
+                return erro("Produto não encontrado")
+            db.execute("UPDATE itens SET produto_id = ? WHERE id = ?", (int(pid), iid))
+            ligados += 1
+        else:
+            db.execute("UPDATE itens SET produto_id = NULL WHERE id = ?", (iid,))
+            soltos += 1
+    if ligados or soltos:
+        registrar(db, "EDITAR", "estoque", None, None,
+                  f"Itens de empenho ligados ao estoque: {ligados} ligado(s)"
+                  + (f", {soltos} desligado(s)" if soltos else "")
+                  + (f"; produtos novos: {', '.join(criados.values())}" if criados else ""))
+    db.commit()
+    return jsonify({"ok": True, "ligados": ligados, "desligados": soltos, "produtos_criados": len(criados)})
+
 
 # ============================================================================
 # IMPORTAÇÃO EM LOTE (planilha Excel) — verifica, mostra a prévia e só grava
