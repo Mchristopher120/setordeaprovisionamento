@@ -27,34 +27,70 @@
         <div class="page-head">
             <div>
                 <h2 class="page-title">Visão geral</h2>
-                <p class="page-sub">Gestão de empenhos e liquidações</p>
+                <p class="page-sub" id="dashSub">Empenhos, pedidos, pagamentos e estoque</p>
             </div>
-            <button id="btnRefresh" class="btn btn-secondary btn-sm" title="Atualizar dados">{{ ico('refresh') }} Atualizar</button>
+            <div class="page-head-acoes">
+                <label class="filtro-exercicio">
+                    <span>Exercício</span>
+                    <select id="fExercicio" aria-label="Exercício (ano do empenho)"><option value="">Todos</option></select>
+                </label>
+                <button id="btnRefresh" class="btn btn-secondary btn-sm" title="Atualizar dados">{{ ico('refresh') }} Atualizar</button>
+            </div>
         </div>
 
+        <!-- 1. O que pede ação hoje -->
         <section class="faixa-atencao" id="atencao" aria-label="Precisa de atenção"></section>
 
-        <section class="kpis" id="kpis"></section>
+        <!-- 2. Números-chave -->
+        <section class="kpis" id="kpis" aria-label="Números-chave"></section>
 
-        <section class="charts-grid charts-3">
-            <div class="card">
-                <div class="card-title">Status dos Pedidos</div>
-                <div class="card-sub">Em aberto, parciais, entregues e encerrados</div>
-                <div id="chartStatus" class="chart-box"></div>
-            </div>
-            <div class="card">
-                <div class="card-title">Pedidos Atrasados</div>
-                <div class="card-sub">Entrega vencida e ainda não concluída</div>
-                <div id="chartAtrasados" class="chart-box"></div>
-            </div>
-            <div class="card">
-                <div class="card-title">Maior Saldo a Liquidar</div>
-                <div class="card-sub">Top 5 fornecedores por valor ainda não liquidado</div>
-                <div id="chartCredores" class="chart-box"></div>
+        <!-- Primeiro uso -->
+        <section class="card boas-vindas" id="boasVindas" hidden>
+            <div class="card-title">Comece por aqui</div>
+            <p class="card-sub">Ainda não há empenhos cadastrados. Escolha um caminho:</p>
+            <div class="bv-opcoes">
+                <a href="/importar" class="bv-op">{{ ico('file-upload') }}<span><strong>Importar planilha</strong><small>Vários empenhos, itens, pedidos e NFs de uma vez</small></span></a>
+                <a href="/empenhos" class="bv-op">{{ ico('plus') }}<span><strong>Cadastrar um empenho</strong><small>Número da NE, fornecedor e itens</small></span></a>
             </div>
         </section>
 
-        <section class="card" id="cardAbc">
+        <!-- 3. Onde agir -->
+        <section class="charts-grid charts-3 so-com-dados" id="gradeAcao">
+            <div class="card">
+                <div class="card-head-link">
+                    <div>
+                        <div class="card-title">Pedidos</div>
+                        <div class="card-sub">Situação dos pedidos e entregas vencidas</div>
+                    </div>
+                    <a href="/empenhos?situacao=ABERTO" class="btn btn-link btn-sm">Em aberto {{ ico('arrow-right') }}</a>
+                </div>
+                <div id="chartStatus" class="chart-box chart-box-compacto"></div>
+                <div id="chartAtrasados" class="atrasos-compacto"></div>
+            </div>
+            <div class="card">
+                <div class="card-head-link">
+                    <div>
+                        <div class="card-title">Maior saldo a liquidar</div>
+                        <div class="card-sub">Fornecedores com mais valor ainda por entregar</div>
+                    </div>
+                    <a href="/empenhos" class="btn btn-link btn-sm">Empenhos {{ ico('arrow-right') }}</a>
+                </div>
+                <div id="chartCredores" class="chart-box"></div>
+            </div>
+            <div class="card">
+                <div class="card-head-link">
+                    <div>
+                        <div class="card-title">Estoque a repor</div>
+                        <div class="card-sub">Produtos no ponto de pedido ou abaixo do mínimo</div>
+                    </div>
+                    <a href="/estoque" class="btn btn-link btn-sm">Estoque {{ ico('arrow-right') }}</a>
+                </div>
+                <div id="listaRepor" class="chart-box"></div>
+            </div>
+        </section>
+
+        <!-- 4. Panorama -->
+        <section class="card so-com-dados" id="cardAbc">
             <div class="chart-head">
                 <div>
                     <div class="card-title">Curva ABC do Estoque</div>
@@ -73,10 +109,10 @@
             </div>
         </section>
 
-        <section class="card">
+        <section class="card so-com-dados">
             <div class="chart-head">
                 <div>
-                    <div class="card-title">Evolução Mensal</div>
+                    <div class="card-title">Evolução mensal</div>
                     <div class="card-sub">Valor liquidado (NFs recebidas) e pago (NFs marcadas como pagas) nos últimos 12 meses</div>
                 </div>
                 <div class="legend">
@@ -84,46 +120,33 @@
                     <span><i style="background:var(--green)"></i>Pago</span>
                 </div>
             </div>
-            <div id="chartEvolucao"></div>
+            <div id="chartEvolucao" class="evo-compacto"></div>
         </section>
 
-        <section class="card">
-            <div class="chart-head">
-                <div>
-                    <div class="card-title">Execução por Empenho</div>
-                    <div class="card-sub">Os 8 maiores empenhos — barra cheia = empenhado; clique para abrir</div>
-                </div>
-                <div class="legend">
-                    <span><i style="background:var(--track)"></i>Empenhado</span>
-                    <span><i style="background:var(--liq)"></i>Liquidado</span>
-                    <span><i style="background:var(--green)"></i>Pago</span>
-                </div>
-            </div>
-            <div id="chartEmpenhos"></div>
-        </section>
-
-        <section class="card table-card">
+        <!-- 5. A lista para agir -->
+        <section class="card table-card so-com-dados">
             <div class="table-head">
-                <h3>Empenhos</h3>
+                <h3>Empenhos com saldo a liquidar</h3>
                 <span class="count-badge" id="countBadge">0 empenhos</span>
             </div>
             <div class="table-wrap">
-                <table id="dataTable">
+                <table id="dataTable" class="tabela-num">
                     <thead>
                         <tr>
-                            <th data-key="ne">NE</th>
-                            <th data-key="nome_credor">Fornecedor</th>
-                            <th data-key="valor_empenhado" data-default="desc">Empenhado</th>
-                            <th data-key="valor_liquidado" data-default="desc">Liquidado</th>
-                            <th data-key="valor_pago" data-default="desc">Pago</th>
-                            <th data-key="a_liquidar" data-default="desc">A Liquidar</th>
-                            <th data-key="percentual_liquidado" data-default="desc">% Liquidado</th>
+                            <th data-key="ne" class="text-left">NE</th>
+                            <th data-key="nome_credor" class="text-left">Fornecedor</th>
+                            <th data-key="valor_empenhado" data-default="desc" class="num">Empenhado</th>
+                            <th data-key="valor_liquidado" data-default="desc" class="num">Liquidado</th>
+                            <th data-key="valor_pago" data-default="desc" class="num">Pago</th>
+                            <th data-key="a_liquidar" data-default="desc" class="num">A liquidar</th>
+                            <th data-key="percentual_liquidado" data-default="desc">% liquidado</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody id="tableBody"></tbody>
                 </table>
             </div>
+            <div class="table-rodape" id="tableRodape" hidden></div>
         </section>
     </main>
 

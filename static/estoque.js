@@ -428,6 +428,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (['abc', 'vinculos', 'param'].includes(aba)) trocarAba(aba);
     carregar().then(() => {
         // vindo do gráfico do Dashboard: /estoque?produto=ID#abc abre o produto
+        const sitUrl = new URLSearchParams(location.search).get('situacao');
+        if (sitUrl && SITUACAO[sitUrl]) { $('pSituacao').value = sitUrl; renderProdutos(); history.replaceState(null, '', location.pathname); }
         const pid = new URLSearchParams(location.search).get('produto');
         if (pid && E.dados && E.dados.produtos.some(p => p.id === +pid)) abrirDetalhe(+pid);
         if (pid) history.replaceState(null, '', location.pathname + location.hash);

@@ -1850,20 +1850,27 @@ def api_restaurar(lid):
 # ============================================================================
 @app.route("/api/stats_empenhos")
 def api_stats_empenhos():
+    """Indicadores gerais. ?ano=2026 restringe aos empenhos daquele exercício (pelo número da NE)."""
     db = get_db()
-    lista = financeiro_empenhos(db)
+    todos = financeiro_empenhos(db)
+    anos = sorted({e["ano"] for e in todos if e.get("ano")}, reverse=True)
+    ano = (request.args.get("ano") or "").strip()
+    lista = [e for e in todos if e["ano"] == ano] if ano else todos
+    eids = {e["id"] for e in lista}
+    no_filtro = (lambda eid: eid in eids) if ano else (lambda eid: True)
     tot = len(lista)
     empenhado = sum(e["valor_empenhado"] for e in lista)
     liquidado = sum(e["valor_liquidado"] for e in lista)
     pago = sum(e["valor_pago"] for e in lista)
-    itens = db.execute("SELECT COUNT(*) as qtd FROM itens").fetchone()["qtd"]
-    pedidos = db.execute("SELECT COUNT(*) as qtd FROM pedidos").fetchone()["qtd"]
+    itens = sum(1 for r in db.execute("SELECT empenho_id FROM itens").fetchall() if no_filtro(r["empenho_id"]))
+    pid_emp = {r["id"]: r["empenho_id"] for r in db.execute("SELECT id, empenho_id FROM pedidos").fetchall()}
+    pedidos = sum(1 for eid in pid_emp.values() if no_filtro(eid))
 
-    fis = db.execute(
-        "SELECT i.qtde_empenhada as emp,"
+    fis = [f for f in db.execute(
+        "SELECT i.empenho_id, i.qtde_empenhada as emp,"
         " (SELECT COALESCE(SUM(r.qtde_recebida),0) FROM recebimentos r WHERE r.item_id = i.id) as rec"
         " FROM itens i WHERE i.qtde_empenhada > 0"
-    ).fetchall()
+    ).fetchall() if no_filtro(f["empenho_id"])]
     itens_com_qtde = len(fis)
     itens_zerados = sum(1 for f in fis if float(f["rec"]) + EPS >= float(f["emp"]))
     percentual_fisico = (
@@ -1873,7 +1880,7 @@ def api_stats_empenhos():
     concluidos = sum(1 for e in lista if e["situacao"] == "CONCLUIDO")
 
     status_pedidos = {"INCLUIDO": 0, "PARCIAL": 0, "RECEBIDO": 0, "ENCERRADO": 0}
-    resumo = resumo_pedidos(db)
+    resumo = {pid: p for pid, p in resumo_pedidos(db).items() if no_filtro(pid_emp.get(pid))}
     for p in resumo.values():
         if p["pedida"] > 0:
             status_pedidos[p["status"]] += 1
@@ -1902,7 +1909,8 @@ def api_stats_empenhos():
         "pedidos_em_aberto": aberto,
         "pedidos_atrasados": len(atrasados),
         "pedidos_vencendo": sum(1 for p in resumo.values() if p["vencendo"]),
-        "nfs_a_pagar": sum(q for q, _ in nfs_a_pagar_por_empenho(db).values()),
+        "nfs_a_pagar": sum(q for eid, (q, _) in nfs_a_pagar_por_empenho(db).items() if no_filtro(eid)),
+        "ano": ano, "anos": anos,
         "lista_atrasados": atrasados[:10],
         "valor_empenhado": empenhado,
         "valor_liquidado": liquidado,
@@ -1924,8 +1932,11 @@ def api_stats_empenhos():
 
 @app.route("/api/evolucao")
 def api_evolucao():
-    """Liquidado (NFs recebidas) e pago (NFs marcadas como pagas) por mês, nos últimos 12 meses."""
+    """Liquidado (NFs recebidas) e pago (NFs marcadas como pagas) por mês, nos últimos 12 meses.
+    ?ano=2026 conta só as NFs dos empenhos daquele exercício."""
     db = get_db()
+    ano = (request.args.get("ano") or "").strip()
+    eids = {e["id"] for e in financeiro_empenhos(db) if e["ano"] == ano} if ano else None
     hoje = date.today()
     meses = []
     a, m = hoje.year, hoje.month
@@ -1938,16 +1949,20 @@ def api_evolucao():
     liq = {k: 0.0 for k in meses}
     pag = {k: 0.0 for k in meses}
     for r in db.execute(
-        "SELECT r.data_recebimento as d, r.qtde_recebida * i.valor_unitario as v"
+        "SELECT r.empenho_id, r.data_recebimento as d, r.qtde_recebida * i.valor_unitario as v"
         " FROM recebimentos r JOIN itens i ON i.id = r.item_id WHERE r.data_recebimento >= ?", (meses[0] + "-01",)
     ).fetchall():
+        if eids is not None and r["empenho_id"] not in eids:
+            continue
         k = (r["d"] or "")[:7]
         if k in liq:
             liq[k] += float(r["v"] or 0)
     for r in db.execute(
-        "SELECT r.pago_em as d, r.qtde_recebida * i.valor_unitario as v FROM recebimentos r"
+        "SELECT r.empenho_id, r.pago_em as d, r.qtde_recebida * i.valor_unitario as v FROM recebimentos r"
         " JOIN itens i ON i.id = r.item_id WHERE r.pago_em >= ?", (meses[0] + "-01",)
     ).fetchall():
+        if eids is not None and r["empenho_id"] not in eids:
+            continue
         k = (r["d"] or "")[:7]
         if k in pag:
             pag[k] += float(r["v"] or 0)
