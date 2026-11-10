@@ -120,35 +120,7 @@ function renderAbc() {
         <td>${pct(p.participacao)}</td><td>${pct(p.acumulado)}</td></tr>`).join('')
         : `<tr><td colspan="8" class="empty">Sem produtos.</td></tr>`;
     E.paretoDados = [comValor, cfg];
-    if (!$('tab-abc').hidden) graficoPareto($('chartAbc'), comValor, cfg);
-}
-
-function graficoPareto(el, ps, cfg) {
-    if (!ps.length) { el.innerHTML = `<div class="chart-empty">Lance as saídas (consumo) para montar a curva ABC.</div>`; return; }
-    const W = Math.max(el.clientWidth || 640, ps.length * 30 + 130), H = 320, ml = 78, mr = 48, mt = 16, mb = 92;
-    const iw = W - ml - mr, ih = H - mt - mb;
-    const max = ps[0].valor_anual;
-    const mag = Math.pow(10, Math.floor(Math.log10(max)));
-    const topo = [1, 2, 2.5, 5, 10].map(f => f * mag).find(v => v >= max);
-    const bw = iw / ps.length;
-    const y = (v) => mt + ih - (v / topo) * ih;
-    const yp = (p) => mt + ih - (p / 100) * ih;
-    let acum = 0;
-    const pts = ps.map((p, i) => { acum += p.participacao; return [ml + bw * i + bw / 2, yp(Math.min(acum, 100))]; });
-    const grades = [0, 0.25, 0.5, 0.75, 1];
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Curva ABC">
-        ${grades.map(f => `<line x1="${ml}" x2="${W - mr}" y1="${y(topo * f)}" y2="${y(topo * f)}" class="pa-grade"/>
-            <text x="${ml - 8}" y="${y(topo * f) + 4}" class="pa-eixo" text-anchor="end">${fmtMoneyCurto(topo * f)}</text>
-            <text x="${W - mr + 8}" y="${yp(f * 100) + 4}" class="pa-eixo">${f * 100}%</text>`).join('')}
-        ${[cfg.limite_a, cfg.limite_b].map(l => `<line x1="${ml}" x2="${W - mr}" y1="${yp(l)}" y2="${yp(l)}" class="pa-limite"/>
-            <text x="${W - mr - 6}" y="${yp(l) + 14}" class="pa-limite-txt" text-anchor="end">${num2(l, 1)}%${l === cfg.limite_a ? ' · fim da classe A' : ' · fim da classe B'}</text>`).join('')}
-        ${ps.map((p, i) => `<rect x="${ml + bw * i + bw * 0.14}" y="${y(p.valor_anual)}" width="${bw * 0.72}" height="${mt + ih - y(p.valor_anual)}"
-                rx="3" class="pa-barra pa-${p.classe.toLowerCase()}" data-id="${p.id}"><title>${escapeHTML(p.nome)} — ${fmtMoney(p.valor_anual)}/ano (${pct(p.participacao)}; acumulado ${pct(p.acumulado)}) · classe ${p.classe}</title></rect>
-            <text transform="translate(${ml + bw * i + bw / 2},${mt + ih + 10}) rotate(-50)" class="pa-rot" text-anchor="end">${escapeHTML(p.nome.length > 16 ? p.nome.slice(0, 15) + '…' : p.nome)}</text>`).join('')}
-        <polyline points="${pts.map(p => p.join(',')).join(' ')}" class="pa-linha"/>
-        ${pts.map(([x, yy]) => `<circle cx="${x}" cy="${yy}" r="3" class="pa-ponto"/>`).join('')}
-    </svg>`;
-    el.querySelectorAll('.pa-barra').forEach(r => r.addEventListener('click', () => abrirDetalhe(+r.dataset.id)));
+    if (!$('tab-abc').hidden) graficoPareto($('chartAbc'), comValor, cfg, abrirDetalhe);
 }
 
 // ------------------------------------------------------------------ detalhe
@@ -413,7 +385,7 @@ function trocarAba(nome) {
     document.querySelectorAll('.tab').forEach(t => { const a = t.dataset.tab === nome; t.classList.toggle('active', a); t.setAttribute('aria-selected', a); });
     ['produtos', 'abc', 'vinculos', 'param'].forEach(n => { $(`tab-${n}`).hidden = n !== nome; });
     if (nome === 'vinculos' && !E.vinc) carregarVinculos();
-    if (nome === 'abc' && E.paretoDados) graficoPareto($('chartAbc'), ...E.paretoDados); // largura certa só com a aba visível
+    if (nome === 'abc' && E.paretoDados) graficoPareto($('chartAbc'), ...E.paretoDados, abrirDetalhe); // largura certa só com a aba visível
     history.replaceState(null, '', nome === 'produtos' ? location.pathname : `#${nome}`);
 }
 
@@ -454,6 +426,11 @@ document.addEventListener('DOMContentLoaded', () => {
     ativarOrdenacao($('tblProdutos'), E.sort, renderProdutos);
     const aba = location.hash.slice(1);
     if (['abc', 'vinculos', 'param'].includes(aba)) trocarAba(aba);
-    carregar();
+    carregar().then(() => {
+        // vindo do gráfico do Dashboard: /estoque?produto=ID#abc abre o produto
+        const pid = new URLSearchParams(location.search).get('produto');
+        if (pid && E.dados && E.dados.produtos.some(p => p.id === +pid)) abrirDetalhe(+pid);
+        if (pid) history.replaceState(null, '', location.pathname + location.hash);
+    });
     fetchJSON('/api/stats_empenhos').then(marcarPendencias).catch(() => { /* contador é opcional */ });
 });

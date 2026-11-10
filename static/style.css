@@ -309,7 +309,7 @@ body {
 }
 .chart-empty span { font-size: 28px; opacity: .6; }
 
-.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.legend { display: flex; gap: 6px 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; align-items: center; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i, .donut-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
 
@@ -1164,4 +1164,23 @@ tbody td a:not(.btn):hover { text-decoration: underline; }
     .calc th { white-space: normal; width: auto; }
     .calc, .calc tbody, .calc tr, .calc th, .calc td { display: block; }
     .calc td { border-top: none; padding-top: 0; }
+}
+
+/* Curva ABC no Dashboard */
+.abc-dash { display: grid; grid-template-columns: minmax(0, 1fr) 230px; gap: 18px; align-items: center; }
+.abc-dash-resumo { display: flex; flex-direction: column; gap: 10px; }
+.abc-dash-linha {
+    display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 10px;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text); text-decoration: none;
+    transition: border-color .15s;
+}
+.abc-dash-linha:hover { border-color: var(--primary); }
+.abc-dash-linha .abc { width: 32px; height: 32px; font-size: 16px; border-radius: 9px; }
+.abc-dash-linha strong { font-size: 17px; }
+.abc-dash-linha small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.chart-head .legend .btn-link { margin-left: 4px; }
+@media (max-width: 900px) {
+    .abc-dash { grid-template-columns: 1fr; }
+    .abc-dash-resumo { flex-direction: row; flex-wrap: wrap; }
+    .abc-dash-linha { flex: 1 1 180px; }
 }
