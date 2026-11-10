@@ -33,8 +33,7 @@ Após 5 senhas erradas em 15 minutos, o acesso daquele endereço fica bloqueado 
    - **Pagamento**: no pedido, abra **🧾 NFs** e clique em **✓ Marcar como paga** na NF. O botão fica destacado enquanto houver NF a pagar. Dá para desfazer.
 3. **🕘 Histórico** mostra quem fez cada alteração. A aba **Lixeira** permite restaurar exclusões.
 4. **⬇ Excel** baixa uma planilha com empenhos, itens, pedidos e NFs (com a situação de pagamento de cada uma).
-5. **Estoque**: em **Ligar itens**, aceite as sugestões para ligar cada item de empenho a um produto (feito uma vez; itens novos com o mesmo nome e unidade são ligados sozinhos). Lance o **inventário inicial** (Contagem / inventário) e, depois, as **saídas** do dia ou da semana. As NFs recebidas entram sozinhas. A tela mostra saldo, cobertura, **curva ABC**, **lote econômico**, **estoque de segurança** e **ponto de pedido** de cada produto, com o cálculo passo a passo.
-6. **Tema**: o botão 🖥️/🌙/☀️ no topo alterna entre automático (segue o sistema), escuro e claro. A escolha fica salva no navegador.
+5. **Tema**: o botão 🖥️/🌙/☀️ no topo alterna entre automático (segue o sistema), escuro e claro. A escolha fica salva no navegador.
 
 ## Regras do sistema
 - **Saldo físico** = qtde empenhada − recebido.
@@ -43,19 +42,10 @@ Após 5 senhas erradas em 15 minutos, o acesso daquele endereço fica bloqueado 
 - **Pago** = Σ valor das NFs marcadas como pagas.
 - **A liquidar** = empenhado − liquidado · **A pagar** = liquidado − pago.
 - **Reforço / anulação** (botão ±) altera a quantidade do item e guarda o documento. A anulação vai até o saldo a pedir.
-- **Status do pedido**: `Em aberto` → `Parcial` → `Recebido`. **Encerrado** é o pedido fechado manualmente: o que faltava volta ao saldo a pedir.
+- **Status do pedido**: `Aguardando` → `Parcial` → `Recebido`. **Encerrado** é o pedido fechado manualmente: o que faltava volta ao saldo a pedir.
 - **Atrasado** = pedido aguardando ou parcial com a data de entrega (data + prazo) vencida.
 - O recebimento aceita só os itens do pedido e até o que falta chegar.
 - **Exclusões vão para a lixeira**, com tudo o que saiu junto. NF paga não pode ser corrigida nem excluída (nem o item ou pedido dela, nem o valor unitário do item alterado) até desfazer o pagamento.
-
-## Estoque (fórmulas)
-- **Saldo** = inventário inicial + NFs recebidas − saídas ± ajustes de contagem.
-- **Consumo médio diário (d̄)** = saídas do período ÷ dias (padrão: 90 dias). **σd** é medido por semana e convertido (σsemana ÷ √7).
-- **Prazo (L)** = média real entre a data do pedido e a 1ª NF de cada pedido do produto (sem histórico: prazo padrão).
-- **Curva ABC**: valor anual = d̄ × 365 × custo unitário; A até 80% do valor acumulado, B até 95%, C o resto.
-- **Lote econômico (LEC)** = √(2·D·S ÷ H), H = i × custo unitário. Para perecíveis, limitado ao consumo durante a vida útil.
-- **Estoque de segurança (ES)** = Z × √(L·σd² + d̄²·σL²). **Ponto de pedido (PP)** = d̄ × L + ES.
-- Parâmetros padrão (editáveis na aba Parâmetros e por produto): custo do pedido R$ 50, custo de manter 25% ao ano, nível de serviço 95% (Z = 1,645).
 
 ## Banco de dados
 - **Local (desenvolvimento)**: SQLite em `aprov.db`, usado automaticamente quando `DATABASE_URL` **não** está definida.
@@ -77,8 +67,6 @@ static/charts.js    # gráficos em SVG/HTML puro (funcionam offline)
 static/app.js       # dashboard
 static/empenhos.js  # tela de empenhos
 static/historico.js # histórico e lixeira
-estoque.py          # contas do estoque (ABC, LEC, ES, PP) — funções puras
-static/estoque.js   # tela de estoque
 static/style.css
 static/fonts/       # fonte Inter (telas: InterVariable.woff2; PDF: Inter-*.ttf) — licença OFL
 static/img/         # folha de acanto (Logística) e brasão do 3º CGEO (PDF)
