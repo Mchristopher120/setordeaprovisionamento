@@ -17,7 +17,6 @@ async function loadAll({ aviso = false } = {}) {
         marcarPendencias(stats);
         renderGraficos(stats, empenhos, evolucao);
         renderTable();
-        carregarAbc();
         if (aviso) showToast('Dados atualizados', 'success');
     } catch (err) {
         document.getElementById('erroMsg').textContent = err.message;
@@ -27,7 +26,7 @@ async function loadAll({ aviso = false } = {}) {
             document.getElementById('atencao').innerHTML = '';
             document.getElementById('tableBody').innerHTML =
                 `<tr><td colspan="8" class="empty">Dados indisponíveis no momento.</td></tr>`;
-            ['chartStatus', 'chartAtrasados', 'chartCredores', 'chartEvolucao', 'chartEmpenhos', 'chartAbcDash'].forEach(id =>
+            ['chartStatus', 'chartAtrasados', 'chartCredores', 'chartEvolucao', 'chartEmpenhos'].forEach(id =>
                 document.getElementById(id).innerHTML = graficoVazio('Dados indisponíveis.'));
         }
     }
@@ -184,37 +183,3 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btnTentar').addEventListener('click', () => loadAll({ aviso: true }));
     loadAll();
 });
-
-
-// Curva ABC do estoque (mesmo gráfico da tela de Estoque)
-let abcDash = null;
-async function carregarAbc() {
-    const el = document.getElementById('chartAbcDash');
-    try { abcDash = await fetchJSON('/api/estoque'); }
-    catch { el.innerHTML = graficoVazio('Curva ABC indisponível no momento.'); return; }
-    renderAbcDash();
-}
-function renderAbcDash() {
-    if (!abcDash) return;
-    const el = document.getElementById('chartAbcDash'), res = document.getElementById('abcDashResumo');
-    const ps = abcDash.produtos.filter(p => p.valor_anual > 0).sort((a, b) => b.valor_anual - a.valor_anual);
-    if (!ps.length) {
-        el.innerHTML = graficoVazio(abcDash.produtos.length
-            ? 'Lance as saídas (consumo) no Estoque para montar a curva ABC.'
-            : 'Ligue os itens de empenho aos produtos no Estoque para montar a curva ABC.');
-        res.innerHTML = '';
-        return;
-    }
-    graficoPareto(el, ps, abcDash.config, (id) => { location.href = `/estoque?produto=${id}#abc`; });
-    const total = ps.reduce((a, p) => a + p.valor_anual, 0);
-    const nTot = abcDash.produtos.length;
-    res.innerHTML = ['A', 'B', 'C'].map(c => {
-        const g = abcDash.produtos.filter(p => p.classe === c);
-        const v = g.reduce((a, p) => a + p.valor_anual, 0);
-        return `<a class="abc-dash-linha" href="/estoque#abc">
-            <span class="abc abc-${c.toLowerCase()}">${c}</span>
-            <span><strong>${pct(total ? v / total * 100 : 0)}</strong> do valor
-                <small>${fmtNum(g.length)} produto${g.length === 1 ? '' : 's'} (${pct(nTot ? g.length / nTot * 100 : 0)}) · ${fmtMoneyCurto(v)}/ano</small></span></a>`;
-    }).join('');
-}
-window.addEventListener('resize', () => { clearTimeout(renderAbcDash.t); renderAbcDash.t = setTimeout(renderAbcDash, 200); });
