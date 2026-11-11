@@ -1035,3 +1035,58 @@ tbody td a:not(.btn):hover { text-decoration: underline; }
 .modal-body label.check { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 500; color: var(--text); font-size: 13.5px; }
 .modal-body label.check[hidden] { display: none; }
 .modal-body .check input { width: auto; padding: 0; margin: 0; accent-color: var(--primary); }
+
+/* ---------- Empenhos: quadros por fornecedor ---------- */
+.table-head-acoes { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.seg-btn {
+    display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--muted);
+    font: inherit; font-size: 13.5px; font-weight: 600; padding: 7px 12px; border-radius: 7px; cursor: pointer;
+}
+.seg-btn .ico { width: 16px; height: 16px; }
+.seg-btn[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.seg-btn:focus-visible { outline: none; box-shadow: var(--focus); }
+.forn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(258px, 1fr)); gap: 14px; }
+.forn-grid[hidden] { display: none; }
+.forn-card { display: flex; flex-direction: column; min-height: 0; }
+.forn-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.forn-card-nome {
+    color: var(--text); font-weight: 700; line-height: 1.35;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.forn-card-qtd { flex: none; font-size: 11.5px; font-weight: 600; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.forn-card .kpi-value { margin-top: 10px; }
+.forn-card-pct { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.forn-card-itens {
+    font-size: 12.5px; color: var(--muted); margin-top: 10px; line-height: 1.45;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.forn-card-selos { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 12px; }
+.forn-card-selos .badge { font-size: 11.5px; }
+.forn-aberto { margin: 0 0 14px; padding: 4px 0 14px; border-bottom: 1px solid var(--border); }
+.forn-aberto[hidden] { display: none; }
+.forn-aberto .btn-link { padding-left: 0; }
+.forn-aberto-linha { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-top: 4px; }
+.forn-aberto h4 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.3px; }
+.forn-aberto-contato { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; font-size: 13.5px; color: var(--muted); }
+.forn-aberto-contato span { display: inline-flex; align-items: center; gap: 5px; }
+.forn-aberto-contato .ico { width: 15px; height: 15px; }
+.forn-aberto-contato a { color: var(--primary); text-decoration: none; }
+.forn-aberto-nums { display: flex; gap: 22px; flex-wrap: wrap; }
+.forn-aberto-nums span { display: block; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+.forn-aberto-nums strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+#fOrdemForn[hidden] { display: none; }
+@media (max-width: 560px) {
+    .forn-grid { grid-template-columns: 1fr; }
+    .table-head-acoes { width: 100%; justify-content: space-between; }
+}
+.forn-card, .forn-card:visited { text-decoration: none; color: var(--text); cursor: pointer; transition: transform .12s, box-shadow .12s, border-color .12s; }
+.forn-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+.forn-card:focus-visible { outline: none; box-shadow: var(--focus); }
+.forn-card .kpi-value { color: var(--text); }
+/* Botões e selects com o atributo hidden somem de verdade (o display do .btn/.input vencia o [hidden]) */
+.btn[hidden], .input[hidden] { display: none !important; }
+/* Com 2 colunas de cartões, o 5º (ímpar) ocupa a linha inteira em vez de ficar sozinho pela metade */
+@media (max-width: 860px) {
+    .kpis > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+}

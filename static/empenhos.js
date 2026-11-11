@@ -1,7 +1,7 @@
 // Tela de Empenhos (depende de ui.js)
 const estado = {
     empenhoId: null, empenhoAtual: null, itens: [], pedidos: [], obsAntigas: [], movimentos: [], financeiro: {},
-    gruposFechados: new Set(),
+    visao: 'cards', fornPendente: null, contatos: null,
     empenhos: [], pedidoAtual: null, pedidoEditando: null, nfEditando: null, itemMov: null, empenhoEditando: null,
     sortLista: { key: null, dir: 1 }, sortItens: { key: null, dir: 1 }, sortPedidos: { key: null, dir: 1 },
 };
@@ -116,7 +116,8 @@ function preencherAnos() {
     const sel = $('fAno'), atual = sel.value;
     const anos = [...new Set(estado.empenhos.map(e => e.ano).filter(Boolean))].sort().reverse();
     sel.innerHTML = '<option value="">Todos os anos</option>' + anos.map(a => `<option ${a === atual ? 'selected' : ''}>${esc(a)}</option>`).join('');
-    const sf = $('fFornecedor'), atualF = sf.value;
+    const sf = $('fFornecedor'), atualF = estado.fornPendente !== null ? estado.fornPendente : sf.value;
+    estado.fornPendente = null;
     const forn = [...new Set(estado.empenhos.map(e => e.nome_credor).filter(Boolean))]
         .sort((a, b) => a.localeCompare(b, 'pt-BR'));
     sf.innerHTML = '<option value="">Todos os fornecedores</option>' +
@@ -176,74 +177,148 @@ function linhaEmpenho(e) {
         </tr>`;
 }
 
-/** Linha-título de um fornecedor, com os totais dos empenhos dele (clique para recolher). */
-function linhaFornecedor(nome, lista, fechado) {
+/** Soma os números de um grupo de empenhos (um fornecedor). */
+function totaisFornecedor(lista) {
     const soma = (k) => lista.reduce((a, e) => a + (e[k] || 0), 0);
-    const emp = soma('valor_empenhado'), liq = soma('valor_liquidado');
-    const atrasos = soma('pedidos_atrasados');
-    return `
-        <tr class="grupo-row ${fechado ? 'fechado' : ''}" data-grupo="${esc(nome)}" tabindex="0" aria-expanded="${!fechado}"
-            title="${fechado ? 'Mostrar' : 'Recolher'} os empenhos deste fornecedor">
-            <td colspan="2" class="text-left">
-                <span class="grupo-seta" aria-hidden="true">▾</span>
-                <strong>${esc(nome)}</strong>
-                <span class="grupo-qtd">${fmtNum(lista.length)} empenho${lista.length > 1 ? 's' : ''}</span>
-                ${atrasos ? `<span class="badge critico">${ico('alarm')} ${fmtNum(atrasos)}</span>` : ''}
-            </td>
-            <td class="num money">${fmtMoney(emp)}</td>
-            <td class="num money text-teal">${fmtMoney(liq)}</td>
-            <td class="num money text-green">${fmtMoney(soma('valor_pago'))}</td>
-            <td class="num money text-red">${fmtMoney(soma('a_liquidar'))}</td>
-            <td>${pctCell(emp ? liq / emp * 100 : 0)}</td>
-            <td></td>
-        </tr>`;
+    const itens = [];
+    lista.forEach(e => (e.itens_resumo || []).forEach(n => { if (!itens.includes(n)) itens.push(n); }));
+    return {
+        empenhos: lista.length, empenhado: soma('valor_empenhado'), liquidado: soma('valor_liquidado'),
+        pago: soma('valor_pago'), a_liquidar: soma('a_liquidar'), atrasados: soma('pedidos_atrasados'),
+        abertos: soma('pedidos_em_aberto'), nfs: soma('nfs_a_pagar'), itens,
+    };
 }
 
-function renderLista() {
-    const todos = estado.empenhos;
-    const lista = ordenar(filtrar(todos), estado.sortLista.key, estado.sortLista.dir);
-    const agrupar = $('fAgrupar').checked;
-    $('tblEmpenhos').classList.toggle('agrupado', agrupar);
-    const nForn = new Set(lista.map(e => e.nome_credor)).size;
-    $('countBadge').textContent = (lista.length === todos.length
-        ? `${fmtNum(todos.length)} empenho${todos.length === 1 ? '' : 's'}`
-        : `${fmtNum(lista.length)} de ${fmtNum(todos.length)}`) + ` · ${fmtNum(nForn)} fornecedor${nForn === 1 ? '' : 'es'}`;
-    if (!todos.length) {
-        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">${ico('inbox', 'ico ico-empty')}</span>Nenhum empenho cadastrado ainda.<br>Clique em "Novo Empenho" para começar.</td></tr>`;
-        return;
-    }
-    if (!lista.length) {
-        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">${ico('search', 'ico ico-empty')}</span>Nenhum empenho encontrado com esses filtros.</td></tr>`;
-        return;
-    }
-    if (!agrupar) { $('tbodyEmpenhos').innerHTML = lista.map(linhaEmpenho).join(''); return; }
+/** Quadro de um fornecedor, no mesmo estilo dos cartões de cima. A cor do topo mostra a pendência mais séria. */
+function quadroFornecedor(nome, t) {
+    const pctLiq = t.empenhado ? t.liquidado / t.empenhado * 100 : 0;
+    const cor = t.atrasados ? 'red' : t.nfs ? 'amber' : t.abertos ? 'accent' : t.a_liquidar <= 0.005 && t.empenhado > 0 ? 'green' : 'slate';
+    const corBarra = { red: 'var(--red)', amber: 'var(--amber)', accent: 'var(--primary)', green: 'var(--green)', slate: 'var(--kpi-slate)' }[cor];
+    const selos = [
+        t.atrasados && `<span class="badge critico">${ico('alarm')} ${t.atrasados} atrasado${t.atrasados > 1 ? 's' : ''}</span>`,
+        t.abertos && `<span class="badge info">${ico('hourglass')} ${t.abertos} em aberto</span>`,
+        t.nfs && `<span class="badge atencao">${ico('cash')} ${t.nfs} NF${t.nfs > 1 ? 's' : ''} a pagar</span>`,
+        !t.atrasados && !t.abertos && !t.nfs && t.a_liquidar <= 0.005 && t.empenhado > 0 && `<span class="badge ok">${ico('circle-check')} Tudo entregue</span>`,
+    ].filter(Boolean).join('');
+    const resumo = textoResumo(t.itens);
+    return `<a class="kpi kpi-link forn-card ${cor}" href="/empenhos?fornecedor=${encodeURIComponent(nome)}" data-forn="${esc(nome)}"
+            title="Abrir os ${t.empenhos} empenho(s) de ${esc(nome)}">
+        <div class="forn-card-top"><span class="kpi-label forn-card-nome">${esc(nome)}</span>
+            <span class="forn-card-qtd">${fmtNum(t.empenhos)} empenho${t.empenhos === 1 ? '' : 's'}</span></div>
+        <div class="kpi-value">${fmtMoney(t.a_liquidar)}</div>
+        <div class="kpi-sub">a liquidar · empenhado ${fmtMoney(t.empenhado)}</div>
+        ${barraLiq(pctLiq, corBarra)}
+        <div class="forn-card-pct"><span>${pct(pctLiq)} liquidado</span><span>pago ${fmtMoneyCurto(t.pago)}</span></div>
+        ${resumo ? `<div class="forn-card-itens" title="${esc(resumo)}">${esc(resumo)}</div>` : ''}
+        ${selos ? `<div class="forn-card-selos">${selos}</div>` : ''}
+    </a>`;
+}
 
-    // Agrupa por fornecedor (ordem alfabética); dentro do grupo vale a ordenação escolhida
+function barraLiq(p, cor) {
+    const v = Math.min(100, Math.max(0, p || 0));
+    return `<div class="kpi-bar" role="progressbar" aria-label="Percentual liquidado" aria-valuenow="${Math.round(v)}" aria-valuemin="0" aria-valuemax="100">
+        <span style="width:${v}%;background:${cor}"></span></div>`;
+}
+
+function renderQuadros(lista) {
     const grupos = new Map();
     lista.forEach(e => {
         const k = e.nome_credor || '—';
         if (!grupos.has(k)) grupos.set(k, []);
         grupos.get(k).push(e);
     });
-    const nomes = [...grupos.keys()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-    $('tbodyEmpenhos').innerHTML = nomes.map(nome => {
-        const fechado = estado.gruposFechados.has(nome);
-        return linhaFornecedor(nome, grupos.get(nome), fechado) + (fechado ? '' : grupos.get(nome).map(linhaEmpenho).join(''));
-    }).join('');
-    $('tbodyEmpenhos').querySelectorAll('.grupo-row').forEach(tr => {
-        const alternar = () => {
-            const g = tr.dataset.grupo;
-            if (estado.gruposFechados.has(g)) estado.gruposFechados.delete(g); else estado.gruposFechados.add(g);
-            renderLista();
-        };
-        tr.addEventListener('click', alternar);
-        tr.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); alternar(); } });
+    const ordem = $('fOrdemForn').value;
+    const itens = [...grupos.entries()].map(([nome, l]) => [nome, totaisFornecedor(l)]);
+    itens.sort(([na, a], [nb, b]) => {
+        if (ordem === 'nome') return na.localeCompare(nb, 'pt-BR');
+        if (ordem === 'pendencias') return (b.atrasados - a.atrasados) || (b.nfs - a.nfs) || (b.abertos - a.abertos) || (b.a_liquidar - a.a_liquidar);
+        return (b.a_liquidar - a.a_liquidar) || na.localeCompare(nb, 'pt-BR');
     });
+    $('gradeForn').innerHTML = itens.map(([nome, t]) => quadroFornecedor(nome, t)).join('');
+    $('gradeForn').querySelectorAll('.forn-card').forEach(a => a.addEventListener('click', (ev) => {
+        if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return; // abrir em outra aba continua funcionando
+        ev.preventDefault();
+        abrirFornecedor(a.dataset.forn);
+    }));
+    ajustarValores($('gradeForn'));
+}
+
+/** Abre os empenhos de um fornecedor (a partir do quadro). */
+function abrirFornecedor(nome, { pushUrl = true } = {}) {
+    $('fFornecedor').value = nome;
+    if (pushUrl) history.pushState({ fornecedor: nome }, '', `/empenhos?fornecedor=${encodeURIComponent(nome)}`);
+    renderLista();
+    $('secLista').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function fecharFornecedor({ pushUrl = true } = {}) {
+    $('fFornecedor').value = '';
+    if (pushUrl && location.search) history.pushState({}, '', '/empenhos');
+    renderLista();
+}
+
+/** Faixa do fornecedor aberto: voltar, totais e contato do cadastro. */
+async function renderFornAberto(nome, lista) {
+    const t = totaisFornecedor(lista);
+    const el = $('fornAberto');
+    const montar = (c) => {
+        const contato = c ? [
+            c.contato && `<span>${ico('user')} ${esc(c.contato)}</span>`,
+            c.email && `<span>${ico('mail')} <a href="mailto:${esc(c.email.split(',')[0].trim())}">${esc(c.email)}</a></span>`,
+            c.telefone && `<span>${ico('phone')} <a href="tel:${esc(c.telefone.replace(/\D/g, ''))}">${esc(c.telefone)}</a></span>`,
+        ].filter(Boolean).join('') : '';
+        el.innerHTML = `
+            <button type="button" class="btn btn-link btn-sm" id="btnTodosForn">${ico('arrow-left')} Todos os fornecedores</button>
+            <div class="forn-aberto-linha">
+                <div><h4>${esc(nome)}</h4>
+                    <div class="forn-aberto-contato">${contato || `<span class="muted">Sem contato cadastrado · <a href="/fornecedores">cadastrar</a></span>`}</div></div>
+                <div class="forn-aberto-nums">
+                    <div><span>Empenhado</span><strong>${fmtMoney(t.empenhado)}</strong></div>
+                    <div><span>Liquidado</span><strong class="text-teal">${fmtMoney(t.liquidado)}</strong></div>
+                    <div><span>A liquidar</span><strong class="text-red">${fmtMoney(t.a_liquidar)}</strong></div>
+                </div>
+            </div>`;
+        $('btnTodosForn').addEventListener('click', () => fecharFornecedor());
+    };
+    montar(estado.contatos ? estado.contatos.find(c => c.nome === nome) : null);
+    if (!estado.contatos) {
+        try { estado.contatos = await fetchJSON('/api/fornecedores'); } catch { estado.contatos = []; }
+        if ($('fFornecedor').value === nome) montar(estado.contatos.find(c => c.nome === nome));
+    }
+}
+
+function renderLista() {
+    const todos = estado.empenhos;
+    const lista = ordenar(filtrar(todos), estado.sortLista.key, estado.sortLista.dir);
+    const forn = $('fFornecedor').value;
+    const quadros = estado.visao === 'cards' && !forn;
+    document.querySelectorAll('.seg-btn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.visao === estado.visao)));
+    $('fOrdemForn').hidden = !quadros;
+    $('gradeForn').hidden = !quadros;
+    $('wrapTabela').hidden = quadros;
+    $('fornAberto').hidden = !forn;
+    $('tblEmpenhos').classList.toggle('agrupado', !!forn); // fornecedor já está no título: some a coluna
+    const nForn = new Set(lista.map(e => e.nome_credor)).size;
+    $('countBadge').textContent = (lista.length === todos.length
+        ? `${fmtNum(todos.length)} empenho${todos.length === 1 ? '' : 's'}`
+        : `${fmtNum(lista.length)} de ${fmtNum(todos.length)}`) + ` · ${fmtNum(nForn)} fornecedor${nForn === 1 ? '' : 'es'}`;
+    if (forn) renderFornAberto(forn, lista);
+    if (!todos.length) {
+        $('gradeForn').hidden = true; $('wrapTabela').hidden = false;
+        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">${ico('inbox', 'ico ico-empty')}</span>Nenhum empenho cadastrado ainda.<br>Clique em "Novo Empenho" para começar.</td></tr>`;
+        return;
+    }
+    if (!lista.length) {
+        $('gradeForn').hidden = true; $('wrapTabela').hidden = false;
+        $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">${ico('search', 'ico ico-empty')}</span>Nenhum empenho encontrado com esses filtros.</td></tr>`;
+        return;
+    }
+    if (quadros) renderQuadros(lista);
+    else $('tbodyEmpenhos').innerHTML = lista.map(linhaEmpenho).join('');
 }
 
 function limparFiltros() {
-    $('fBusca').value = ''; $('fSituacao').value = ''; $('fAno').value = ''; $('fFornecedor').value = ''; $('fSaldo').checked = false;
-    renderLista();
+    $('fBusca').value = ''; $('fSituacao').value = ''; $('fAno').value = ''; $('fSaldo').checked = false;
+    if ($('fFornecedor').value) fecharFornecedor(); else renderLista();
 }
 
 // =====================================================================
@@ -329,7 +404,9 @@ function voltarLista({ pushUrl = true } = {}) {
     $('secDetalhe').style.display = 'none';
     $('secLista').style.display = 'block';
     $('boxHistorico').open = false;
-    if (pushUrl && location.search) history.pushState({}, '', '/empenhos');
+    const forn = $('fFornecedor').value; // voltando de um empenho, continua no fornecedor de onde veio
+    const destino = forn ? `/empenhos?fornecedor=${encodeURIComponent(forn)}` : '/empenhos';
+    if (pushUrl && location.pathname + location.search !== destino) history.pushState({}, '', destino);
     carregarLista().catch(err => toast(err.message, 'error'));
 }
 
@@ -908,8 +985,10 @@ function rotaAtual() {
             $('fSituacao').value = sit;
             history.replaceState({}, '', '/empenhos'); // o filtro fica aplicado, a URL fica limpa
         }
+        // ?fornecedor=NOME abre os empenhos daquele fornecedor (o valor é aplicado quando a lista chega)
         const forn = new URLSearchParams(location.search).get('fornecedor');
-        if (forn) { $('fBusca').value = forn; history.replaceState({}, '', '/empenhos'); }
+        estado.fornPendente = forn || '';
+        if ($('fFornecedor').querySelector('option[value]') && estado.empenhos.length) $('fFornecedor').value = forn || '';
         voltarLista({ pushUrl: false });
     }
 }
@@ -943,9 +1022,22 @@ document.addEventListener('DOMContentLoaded', () => {
     $('btnExcluirEmpenho').addEventListener('click', () => apagarEmpenho(estado.empenhoId));
     $('boxHistorico').addEventListener('toggle', () => { if ($('boxHistorico').open) carregarHistorico(); });
 
-    ['fBusca', 'fSituacao', 'fAno', 'fFornecedor', 'fSaldo', 'fAgrupar'].forEach(id => $(id).addEventListener('input', renderLista));
-    try { const ag = localStorage.getItem('aprov-agrupar'); if (ag !== null) $('fAgrupar').checked = ag === '1'; } catch (e) { /* sem storage */ }
-    $('fAgrupar').addEventListener('change', () => { try { localStorage.setItem('aprov-agrupar', $('fAgrupar').checked ? '1' : '0'); } catch (e) { /* sem storage */ } });
+    ['fBusca', 'fSituacao', 'fAno', 'fSaldo', 'fOrdemForn'].forEach(id => $(id).addEventListener('input', renderLista));
+    $('fFornecedor').addEventListener('input', () => {
+        const v = $('fFornecedor').value;
+        history.pushState({}, '', v ? `/empenhos?fornecedor=${encodeURIComponent(v)}` : '/empenhos');
+        renderLista();
+    });
+    try {
+        const v = localStorage.getItem('aprov-visao'); if (v === 'cards' || v === 'lista') estado.visao = v;
+        const o = localStorage.getItem('aprov-ordem-forn'); if (o) $('fOrdemForn').value = o;
+    } catch (e) { /* sem storage */ }
+    document.querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => {
+        estado.visao = b.dataset.visao;
+        try { localStorage.setItem('aprov-visao', estado.visao); } catch (e) { /* sem storage */ }
+        renderLista();
+    }));
+    $('fOrdemForn').addEventListener('change', () => { try { localStorage.setItem('aprov-ordem-forn', $('fOrdemForn').value); } catch (e) { /* sem storage */ } });
     $('btnLimparFiltros').addEventListener('click', limparFiltros);
 
     ativarOrdenacao($('tblEmpenhos'), estado.sortLista, renderLista);
