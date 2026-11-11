@@ -28,11 +28,17 @@
         <section class="card table-card" id="secLista">
             <div class="table-head">
                 <h3>Empenhos <span class="count-badge" id="countBadge">0 empenhos</span></h3>
-                <button id="btnNew" class="btn btn-primary">{{ ico('plus') }} Novo Empenho</button>
+                <div class="table-head-acoes">
+                    <div class="seg" role="group" aria-label="Forma de ver">
+                        <button type="button" class="seg-btn" data-visao="cards" aria-pressed="true">{{ ico('layout-grid') }} Fornecedores</button>
+                        <button type="button" class="seg-btn" data-visao="lista" aria-pressed="false">{{ ico('list') }} Lista</button>
+                    </div>
+                    <button id="btnNew" class="btn btn-primary">{{ ico('plus') }} Novo Empenho</button>
+                </div>
             </div>
             <div class="toolbar" role="search">
                 <input type="search" id="fBusca" class="input" placeholder="Buscar NE, fornecedor, processo ou item…" aria-label="Buscar">
-                <select id="fSituacao" class="input" aria-label="Situação">
+                <select id="fSituacao" class="input" aria-label="Situação" hidden>
                     <option value="">Todas as situações</option>
                     <option value="ABERTO">Com pedido em aberto</option>
                     <option value="ANDAMENTO">Em andamento (itens a receber)</option>
@@ -45,10 +51,21 @@
                 <select id="fFornecedor" class="input" aria-label="Fornecedor"><option value="">Todos os fornecedores</option></select>
                 <select id="fAno" class="input" aria-label="Ano"><option value="">Todos os anos</option></select>
                 <label class="check"><input type="checkbox" id="fSaldo"> Só com saldo a liquidar</label>
-                <label class="check"><input type="checkbox" id="fAgrupar" checked> Agrupar por fornecedor</label>
+                <select id="fOrdemForn" class="input" aria-label="Ordenar fornecedores">
+                    <option value="saldo">Maior saldo a liquidar</option>
+                    <option value="pendencias">Mais pendências</option>
+                    <option value="nome">Nome (A–Z)</option>
+                </select>
                 <button id="btnLimparFiltros" class="btn btn-link btn-sm" hidden>Limpar filtros</button>
             </div>
-            <div class="table-wrap">
+            <div class="chips" id="chipsSituacao" role="group" aria-label="Situação"></div>
+            <!-- Fornecedor aberto: volta para os quadros e mostra o contato -->
+            <div class="forn-aberto" id="fornAberto" hidden></div>
+            <!-- Quadros por fornecedor -->
+            <div class="forn-grid" id="gradeForn" hidden></div>
+            <!-- Empenhos de um fornecedor, em cartões -->
+            <div class="emp-lista" id="listaEmpForn" hidden></div>
+            <div class="table-wrap" id="wrapTabela">
                 <table id="tblEmpenhos">
                     <thead>
                         <tr>
@@ -83,8 +100,15 @@
                 </div>
             </div>
 
-            <h4>Itens do Empenho</h4>
-            <div class="table-wrap">
+            <div class="section-head">
+                <h4>Itens do Empenho <span class="count-badge" id="itensCount"></span></h4>
+                <div class="seg seg-sm" role="group" aria-label="Forma de ver itens e pedidos">
+                    <button type="button" class="seg-btn" data-visao-det="cards" aria-pressed="true">{{ ico('layout-grid') }} Cartões</button>
+                    <button type="button" class="seg-btn" data-visao-det="tabela" aria-pressed="false">{{ ico('list') }} Tabela</button>
+                </div>
+            </div>
+            <div class="item-lista" id="listaItens"></div>
+            <div class="table-wrap" id="wrapItens">
                 <table id="tblItens">
                     <thead>
                         <tr>
@@ -108,9 +132,10 @@
             <div id="secMovimentos" class="mt-small"></div>
 
             <div class="section-head mt-section">
-                <h4>Pedidos</h4>
+                <h4>Pedidos <span class="count-badge" id="pedidosCount"></span></h4>
             </div>
-            <div class="table-wrap">
+            <div class="ped-grid" id="listaPedidos"></div>
+            <div class="table-wrap" id="wrapPedidos">
                 <table id="tblPedidos">
                     <thead>
                         <tr>
