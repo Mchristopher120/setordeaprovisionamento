@@ -203,10 +203,13 @@ function quadroFornecedor(nome, t) {
     const resumo = textoResumo(t.itens);
     return `<a class="kpi kpi-link forn-card ${cor}" href="/empenhos?fornecedor=${encodeURIComponent(nome)}" data-forn="${esc(nome)}"
             title="Abrir os ${t.empenhos} empenho(s) de ${esc(nome)}">
-        <div class="forn-card-top"><span class="kpi-label forn-card-nome">${esc(nome)}</span>
+        <div class="forn-card-top"><span class="kpi-label">Fornecedor</span>
             <span class="forn-card-qtd">${fmtNum(t.empenhos)} empenho${t.empenhos === 1 ? '' : 's'}</span></div>
-        <div class="kpi-value">${fmtMoney(t.a_liquidar)}</div>
-        <div class="kpi-sub">a liquidar · empenhado ${fmtMoney(t.empenhado)}</div>
+        <h3 class="forn-card-nome">${esc(nome)}</h3>
+        <div class="forn-card-valores">
+            <div><span>A liquidar</span><strong class="${t.a_liquidar > 0.005 ? 'text-red' : 'text-green'}">${fmtMoney(t.a_liquidar)}</strong></div>
+            <div><span>Empenhado</span><strong>${fmtMoney(t.empenhado)}</strong></div>
+        </div>
         ${barraLiq(pctLiq, corBarra)}
         <div class="forn-card-pct"><span>${pct(pctLiq)} liquidado</span><span>pago ${fmtMoneyCurto(t.pago)}</span></div>
         ${resumo ? `<div class="forn-card-itens" title="${esc(resumo)}">${esc(resumo)}</div>` : ''}
@@ -240,7 +243,6 @@ function renderQuadros(lista) {
         ev.preventDefault();
         abrirFornecedor(a.dataset.forn);
     }));
-    ajustarValores($('gradeForn'));
 }
 
 /** Abre os empenhos de um fornecedor (a partir do quadro). */
