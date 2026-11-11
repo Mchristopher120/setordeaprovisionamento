@@ -1,7 +1,7 @@
 // Tela de Empenhos (depende de ui.js)
 const estado = {
     empenhoId: null, empenhoAtual: null, itens: [], pedidos: [], obsAntigas: [], movimentos: [], financeiro: {},
-    visao: 'cards', fornPendente: null, contatos: null,
+    visao: 'cards', visaoDet: 'cards', fornPendente: null, contatos: null,
     empenhos: [], pedidoAtual: null, pedidoEditando: null, nfEditando: null, itemMov: null, empenhoEditando: null,
     sortLista: { key: null, dir: 1 }, sortItens: { key: null, dir: 1 }, sortPedidos: { key: null, dir: 1 },
 };
@@ -124,10 +124,10 @@ function preencherAnos() {
         forn.map(f => `<option ${f === atualF ? 'selected' : ''}>${esc(f)}</option>`).join('');
 }
 
-function filtrar(lista) {
+function filtrar(lista, { ignorarSituacao = false } = {}) {
     const busca = normalizar($('fBusca').value.trim());
-    const sit = $('fSituacao').value, ano = $('fAno').value, saldo = $('fSaldo').checked, forn = $('fFornecedor').value;
-    $('btnLimparFiltros').hidden = !(busca || sit || ano || saldo || forn);
+    const sit = ignorarSituacao ? '' : $('fSituacao').value, ano = $('fAno').value, saldo = $('fSaldo').checked, forn = $('fFornecedor').value;
+    if (!ignorarSituacao) $('btnLimparFiltros').hidden = !(busca || sit || ano || saldo || forn);
     return lista.filter(e => {
         if (busca && !normalizar(`${e.ne} ${e.nome_credor} ${e.processo} ${(e.itens_resumo || []).join(' ')}`).includes(busca)) return false;
         if (sit === 'ATRASO') { if (!e.pedidos_atrasados) return false; }
@@ -287,6 +287,7 @@ async function renderFornAberto(nome, lista) {
 }
 
 function renderLista() {
+    renderChips();
     const todos = estado.empenhos;
     const lista = ordenar(filtrar(todos), estado.sortLista.key, estado.sortLista.dir);
     const forn = $('fFornecedor').value;
@@ -312,8 +313,82 @@ function renderLista() {
         $('tbodyEmpenhos').innerHTML = `<tr><td colspan="9" class="empty"><span class="empty-icon">${ico('search', 'ico ico-empty')}</span>Nenhum empenho encontrado com esses filtros.</td></tr>`;
         return;
     }
+    const cartoesForn = !!forn && estado.visao === 'cards';
+    $('listaEmpForn').hidden = !cartoesForn;
+    if (cartoesForn) $('wrapTabela').hidden = true;
     if (quadros) renderQuadros(lista);
+    else if (cartoesForn) renderEmpenhosCartoes(lista);
     else $('tbodyEmpenhos').innerHTML = lista.map(linhaEmpenho).join('');
+}
+
+// Situação em "pílulas" com contagem (no lugar do select): mais rápido de ler e de trocar
+const CHIPS_SITUACAO = [
+    ['', 'Todos', null], ['ABERTO', 'Pedido em aberto', 'hourglass'], ['ATRASO', 'Atrasados', 'alarm'],
+    ['VENCENDO', 'Vencendo em 7 dias', 'calendar-due'], ['APAGAR', 'NF a pagar', 'cash'],
+    ['ANDAMENTO', 'Itens a receber', 'package-import'], ['CONCLUIDO', 'Concluídos', 'circle-check'], ['SEM_ITENS', 'Sem itens', 'file-text'],
+];
+function contaSituacao(lista, sit) {
+    if (!sit) return lista.length;
+    const f = { ATRASO: e => e.pedidos_atrasados, VENCENDO: e => e.pedidos_vencendo, APAGAR: e => e.nfs_a_pagar, ABERTO: e => e.pedidos_em_aberto };
+    return lista.filter(f[sit] || (e => e.situacao === sit)).length;
+}
+function renderChips() {
+    const base = filtrar(estado.empenhos, { ignorarSituacao: true });
+    const atual = $('fSituacao').value;
+    $('chipsSituacao').innerHTML = CHIPS_SITUACAO.map(([v, rot, i]) => {
+        const n = contaSituacao(base, v);
+        if (v && !n && v !== atual) return '';
+        const alerta = (v === 'ATRASO' && n) ? ' chip-alerta' : '';
+        return `<button type="button" class="chip${v === atual ? ' ativo' : ''}${alerta}" data-sit="${v}" aria-pressed="${v === atual}">
+            ${i ? ico(i) : ''}${rot}<span class="chip-n">${fmtNum(n)}</span></button>`;
+    }).join('');
+    $('chipsSituacao').querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
+        $('fSituacao').value = c.dataset.sit;
+        renderLista();
+    }));
+}
+
+/** Empenhos de um fornecedor como cartões (clique abre o empenho). */
+function renderEmpenhosCartoes(lista) {
+    $('listaEmpForn').innerHTML = lista.map(e => {
+        const resumo = textoResumo(e.itens_resumo);
+        const p = Math.min(100, Math.max(0, e.percentual_liquidado || 0));
+        const selos = [
+            e.pedidos_atrasados && `<span class="badge critico">${ico('alarm')} ${e.pedidos_atrasados} atrasado${e.pedidos_atrasados > 1 ? 's' : ''}</span>`,
+            e.pedidos_em_aberto && `<span class="badge info">${ico('hourglass')} ${e.pedidos_em_aberto > 1 ? `${e.pedidos_em_aberto} pedidos em aberto` : 'Pedido em aberto'}</span>`,
+            e.nfs_a_pagar && `<span class="badge atencao">${ico('cash')} ${e.nfs_a_pagar} NF${e.nfs_a_pagar > 1 ? 's' : ''} a pagar</span>`,
+            e.situacao === 'CONCLUIDO' && `<span class="badge ok">${ico('circle-check')} Concluído</span>`,
+            e.situacao === 'SEM_ITENS' && `<span class="badge neutro">Sem itens</span>`,
+        ].filter(Boolean).join('');
+        return `<article class="emp-card" data-id="${e.id}" tabindex="0" aria-label="Abrir empenho ${esc(e.ne)}">
+            <div class="ec-cab">
+                <div class="ec-tit"><strong>${esc(e.ne)}</strong>${e.processo ? `<span class="muted small">Processo ${esc(e.processo)}</span>` : ''}</div>
+                <div class="ec-selos">${selos}</div>
+            </div>
+            ${resumo ? `<p class="ec-itens">${esc(resumo)}</p>` : ''}
+            <div class="ec-nums">
+                <div><span>Empenhado</span><strong>${fmtMoney(e.valor_empenhado)}</strong></div>
+                <div><span>Liquidado</span><strong class="text-teal">${fmtMoney(e.valor_liquidado)}</strong></div>
+                <div><span>Pago</span><strong class="text-green">${fmtMoney(e.valor_pago)}</strong></div>
+                <div><span>A liquidar</span><strong class="text-red">${fmtMoney(e.a_liquidar)}</strong></div>
+            </div>
+            <div class="ec-rodape">
+                <div class="ec-barra"><div class="bar"><span style="width:${p}%;background:${corPct(p)}"></span></div><span class="small muted">${pct(p)} liquidado</span></div>
+                <div class="ec-acoes">
+                    <button class="btn btn-sm btn-danger" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" data-apagar="${e.id}">${ico('trash')}</button>
+                    <button class="btn btn-sm btn-primary" data-abrir="${e.id}">Abrir ${ico('arrow-right')}</button>
+                </div>
+            </div>
+        </article>`;
+    }).join('');
+    $('listaEmpForn').querySelectorAll('.emp-card').forEach(c => {
+        c.addEventListener('click', (ev) => {
+            const ap = ev.target.closest('[data-apagar]');
+            if (ap) { ev.stopPropagation(); apagarEmpenho(+ap.dataset.apagar); return; }
+            abrirDetalhe(+c.dataset.id);
+        });
+        c.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target === c) abrirDetalhe(+c.dataset.id); });
+    });
 }
 
 function limparFiltros() {
@@ -410,8 +485,55 @@ function voltarLista({ pushUrl = true } = {}) {
     carregarLista().catch(err => toast(err.message, 'error'));
 }
 
+function aplicarVisaoDet() {
+    const cards = estado.visaoDet === 'cards';
+    document.querySelectorAll('[data-visao-det]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.visaoDet === estado.visaoDet)));
+    $('listaItens').hidden = !cards; $('wrapItens').hidden = cards;
+    $('listaPedidos').hidden = !cards; $('wrapPedidos').hidden = cards;
+}
+
+/** Barra de quantidade: recebido (cheio) + reservado em pedidos abertos (claro) sobre o empenhado. */
+function barraQtd(rec, res, total, rotulo) {
+    const pr = total > 0 ? Math.min(100, rec / total * 100) : 0;
+    const pp = total > 0 ? Math.min(100 - pr, res / total * 100) : 0;
+    return `<div class="qbar" role="img" aria-label="${esc(rotulo)}"><span class="qbar-rec" style="width:${pr}%"></span><span class="qbar-res" style="width:${pp}%"></span></div>`;
+}
+
+function renderItensCartoes(itens) {
+    $('listaItens').innerHTML = itens.length ? itens.map(i => {
+        const und = esc(i.und || '');
+        const completo = i.saldo_fisico <= EPS;
+        const titulo = i.nome_curto || i.descricao;
+        return `<div class="item-card${completo ? ' completo' : ''}">
+            <div class="ic-main">
+                <div class="ic-tit"><span class="ic-num">${esc(i.numero_item) || '—'}</span><strong>${esc(titulo)}</strong>${und ? `<span class="ic-und">${und}</span>` : ''}</div>
+                <p class="ic-desc" title="${esc(i.descricao)}">${esc(i.descricao)}</p>
+            </div>
+            <div class="ic-qtd">
+                <div class="ic-linha"><span>Recebido <strong>${fmtNum(i.qtde_recebida)}</strong> de ${fmtNum(i.qtde_empenhada)}</span>
+                    ${completo ? `<span class="text-green small">${ico('circle-check', 'ico ico-xs')} entregue</span>` : `<span class="small"><strong>${fmtNum(i.saldo_a_pedir)}</strong> a pedir</span>`}</div>
+                ${barraQtd(i.qtde_recebida, i.reservado || 0, i.qtde_empenhada, `Recebido ${fmtNum(i.qtde_recebida)} de ${fmtNum(i.qtde_empenhada)}`)}
+                <div class="muted small">${i.reservado > 0 ? `${fmtNum(i.reservado)} em pedido aberto · ` : ''}${completo ? 'saldo físico 0' : `faltam ${fmtNum(i.saldo_fisico)} ${und}`}</div>
+            </div>
+            <div class="ic-valor">
+                <strong>${fmtMoney(i.valor_total)}</strong>
+                <span class="muted small">${fmtMoney(i.valor_unitario)}${und ? ` / ${und}` : ''}</span>
+                <span class="small text-teal">liquidado ${fmtMoney(i.liquidado)} · ${pct(i.percentual_liquidado)}</span>
+            </div>
+            <div class="ic-acoes">
+                <button class="btn btn-sm btn-secondary" title="Editar item" aria-label="Editar item ${esc(i.numero_item)}" onclick="editarItem(${i.id})">${ico('pencil')}</button>
+                <button class="btn btn-sm btn-secondary" title="Reforço ou anulação de quantidade" aria-label="Reforço ou anulação" onclick="abrirMovimento(${i.id})">${ico('plus-minus')}</button>
+                <button class="btn btn-sm btn-danger" title="Excluir item" aria-label="Excluir item ${esc(i.numero_item)}" onclick="excluirItem(${i.id})">${ico('trash')}</button>
+            </div>
+        </div>`;
+    }).join('') : `<div class="empty-card"><span class="empty-icon">${ico('file-text', 'ico ico-empty')}</span>Nenhum item. Clique em "Itens".</div>`;
+}
+
 function renderItens() {
     const itens = ordenar(estado.itens, estado.sortItens.key, estado.sortItens.dir);
+    $('itensCount').textContent = `${fmtNum(itens.length)} ${itens.length === 1 ? 'item' : 'itens'}`;
+    aplicarVisaoDet();
+    renderItensCartoes(itens);
     $('tbodyItens').innerHTML = itens.length ? itens.map(i => `
         <tr>
             <td>${esc(i.numero_item)}</td>
@@ -461,8 +583,46 @@ const STATUS = {
     INCLUIDO: ['Em aberto', 'info'], ENCERRADO: ['Encerrado', 'neutro'],
 };
 
+function acoesPedido(p, aberto) {
+    return `${aberto ? `<button class="btn btn-sm btn-primary" onclick="abrirRecebimento(${p.id})">${ico('package-import')} Receber</button>` : ''}
+        <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">${ico('file-type-pdf')}</button>
+        <button class="btn btn-sm btn-secondary${p.enviado_em ? ' btn-enviado' : ''}" onclick="enviarPedido(${p.id})"
+            title="${p.enviado_em ? `E-mail aberto em ${dataBR(p.enviado_em)}${p.enviado_por ? ` por ${esc(p.enviado_por)}` : ''} — clique para enviar de novo` : 'Enviar o pedido por e-mail ao fornecedor'}"
+            aria-label="Enviar pedido por e-mail">${ico('send')}${p.enviado_em ? `<span class="pill ok">${ico('check', 'ico ico-xs')}</span>` : (aberto ? ' Enviar' : '')}</button>
+        ${p.qt_nfs > 0 ? `<button class="btn btn-sm ${p.qt_nfs_a_pagar ? 'btn-attention' : 'btn-secondary'}" onclick="verNfs(${p.id})"
+            title="${p.qt_nfs_a_pagar ? `${p.qt_nfs_a_pagar} NF(s) aguardando pagamento — clique para marcar como paga` : 'Todas as NFs pagas'}"
+            aria-label="Notas fiscais">${ico('file-invoice')} NFs ${p.qt_nfs_a_pagar ? `<span class="pill">${p.qt_nfs_a_pagar} a pagar</span>` : `<span class="pill ok" title="Todas as NFs pagas">${ico('check', 'ico ico-xs')}</span>`}</button>` : ''}
+        <button class="btn btn-sm btn-secondary" onclick="editarPedido(${p.id})" title="Editar pedido" aria-label="Editar pedido">${ico('pencil')}</button>
+        ${aberto ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, false)" title="Encerrar: o que falta não virá e volta ao saldo a pedir" aria-label="Encerrar pedido">${ico('lock')}</button>` : ''}
+        ${p.status === 'ENCERRADO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, true)" title="Reabrir pedido" aria-label="Reabrir pedido">${ico('lock-open')}</button>` : ''}
+        <button class="btn btn-sm btn-danger" title="Excluir pedido" aria-label="Excluir pedido" onclick="excluirPedido(${p.id})">${ico('trash')}</button>`;
+}
+
+function renderPedidosCartoes(pedidos) {
+    $('listaPedidos').innerHTML = pedidos.length ? pedidos.map(p => {
+        const [rot, cls] = STATUS[p.status] || [p.status, 'info'];
+        const aberto = p.status === 'INCLUIDO' || p.status === 'PARCIAL';
+        const pr = p.qtde_total_pedida > 0 ? Math.min(100, p.qtde_total_recebida / p.qtde_total_pedida * 100) : 0;
+        const entrega = p.vencimento
+            ? (p.dias_atraso ? `<span class="badge critico">${ico('alarm')} ${p.dias_atraso} dia${p.dias_atraso > 1 ? 's' : ''} de atraso</span>`
+                : `entrega até <strong>${dataBR(p.vencimento)}</strong>`)
+            : 'sem prazo de entrega';
+        return `<div class="ped-card ped-${cls}${p.dias_atraso ? ' alerta' : ''}">
+            <div class="pc-cab"><strong class="pc-num">${esc(p.numero_pedido)}</strong><span class="badge ${cls}">${rot}</span></div>
+            <div class="pc-info"><span>${ico('calendar-due', 'ico ico-xs')} ${dataBR(p.data_pedido)}</span><span>${fmtNum(p.qt_itens)} ${p.qt_itens === 1 ? 'item' : 'itens'}</span><span>${entrega}</span></div>
+            <div class="pc-qtd"><div class="bar"><span style="width:${pr}%;background:${pr >= 99.999 ? 'var(--green)' : 'var(--primary)'}"></span></div>
+                <span class="small muted">${fmtNum(p.qtde_total_recebida)} de ${fmtNum(p.qtde_total_pedida)} recebidos</span></div>
+            ${p.observacoes ? `<p class="pc-obs">${esc(p.observacoes)}</p>` : ''}
+            <div class="pc-acoes">${acoesPedido(p, aberto)}</div>
+        </div>`;
+    }).join('') : `<div class="empty-card"><span class="empty-icon">${ico('file-invoice', 'ico ico-empty')}</span>Nenhum pedido. Clique em "Fazer Pedido".</div>`;
+}
+
 function renderPedidos() {
     const pedidos = ordenar(estado.pedidos, estado.sortPedidos.key, estado.sortPedidos.dir);
+    $('pedidosCount').textContent = `${fmtNum(pedidos.length)} pedido${pedidos.length === 1 ? '' : 's'}`;
+    aplicarVisaoDet();
+    renderPedidosCartoes(pedidos);
     $('tbodyPedidos').innerHTML = pedidos.length ? pedidos.map(p => {
         const [rot, cls] = STATUS[p.status] || [p.status, 'info'];
         const aberto = p.status === 'INCLUIDO' || p.status === 'PARCIAL';
@@ -477,19 +637,7 @@ function renderPedidos() {
             <td class="num">${fmtNum(p.qtde_total_pedida)}</td>
             <td class="num">${fmtNum(p.qtde_total_recebida)}</td>
             <td><span class="badge ${cls}">${rot}</span></td>
-            <td class="acoes">
-                ${aberto ? `<button class="btn btn-sm btn-primary" onclick="abrirRecebimento(${p.id})">${ico('package-import')} Receber</button>` : ''}
-                <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">${ico('file-type-pdf')}</button>
-                <button class="btn btn-sm btn-secondary${p.enviado_em ? ' btn-enviado' : ''}" onclick="enviarPedido(${p.id})"
-                    title="${p.enviado_em ? `E-mail aberto em ${dataBR(p.enviado_em)}${p.enviado_por ? ` por ${esc(p.enviado_por)}` : ''} — clique para enviar de novo` : 'Enviar o pedido por e-mail ao fornecedor'}"
-                    aria-label="Enviar pedido por e-mail">${ico('send')}${p.enviado_em ? `<span class="pill ok">${ico('check', 'ico ico-xs')}</span>` : (aberto ? ' Enviar' : '')}</button>
-                ${p.qt_nfs > 0 ? `<button class="btn btn-sm ${p.qt_nfs_a_pagar ? 'btn-attention' : 'btn-secondary'}" onclick="verNfs(${p.id})"
-                    title="${p.qt_nfs_a_pagar ? `${p.qt_nfs_a_pagar} NF(s) aguardando pagamento — clique para marcar como paga` : 'Todas as NFs pagas'}"
-                    aria-label="Notas fiscais">${ico('file-invoice')} NFs ${p.qt_nfs_a_pagar ? `<span class="pill">${p.qt_nfs_a_pagar} a pagar</span>` : `<span class="pill ok" title="Todas as NFs pagas">${ico('check', 'ico ico-xs')}</span>`}</button>` : ''}
-                <button class="btn btn-sm btn-secondary" onclick="editarPedido(${p.id})" title="Editar pedido" aria-label="Editar pedido">${ico('pencil')}</button>
-                ${p.status === 'PARCIAL' || p.status === 'INCLUIDO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, false)" title="Encerrar: o que falta não virá e volta ao saldo a pedir" aria-label="Encerrar pedido">${ico('lock')}</button>` : ''}
-                ${p.status === 'ENCERRADO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, true)" title="Reabrir pedido" aria-label="Reabrir pedido">${ico('lock-open')}</button>` : ''}
-                <button class="btn btn-sm btn-danger" title="Excluir pedido" aria-label="Excluir pedido" onclick="excluirPedido(${p.id})">${ico('trash')}</button>
+            <td class="acoes">${acoesPedido(p, aberto)}
             </td>
         </tr>`;
     }).join('') : `<tr><td colspan="8" class="empty"><span class="empty-icon">${ico('file-invoice', 'ico ico-empty')}</span>Nenhum pedido. Clique em "Fazer Pedido".</td></tr>`;
@@ -1036,6 +1184,12 @@ document.addEventListener('DOMContentLoaded', () => {
         estado.visao = b.dataset.visao;
         try { localStorage.setItem('aprov-visao', estado.visao); } catch (e) { /* sem storage */ }
         renderLista();
+    }));
+    try { const vd = localStorage.getItem('aprov-visao-det'); if (vd === 'cards' || vd === 'tabela') estado.visaoDet = vd; } catch (e) { /* sem storage */ }
+    document.querySelectorAll('[data-visao-det]').forEach(b => b.addEventListener('click', () => {
+        estado.visaoDet = b.dataset.visaoDet;
+        try { localStorage.setItem('aprov-visao-det', estado.visaoDet); } catch (e) { /* sem storage */ }
+        aplicarVisaoDet();
     }));
     $('fOrdemForn').addEventListener('change', () => { try { localStorage.setItem('aprov-ordem-forn', $('fOrdemForn').value); } catch (e) { /* sem storage */ } });
     $('btnLimparFiltros').addEventListener('click', limparFiltros);

@@ -900,6 +900,9 @@ def api_detalhe_empenho(eid):
             " WHERE m.empenho_id = ? ORDER BY m.id DESC", (eid,))
     liq, pago = liquidado_e_pago(db, eid)
     empenhado = sum(i["valor_total"] or 0 for i in itens)
+    for i in itens:  # nome curto para os cartões de item ("Biscoito maizena")
+        n = resumo_de_itens([i["descricao"]])
+        i["nome_curto"] = (n[0][:1].upper() + n[0][1:]) if n else ""
     return jsonify({
         "empenho": dict(empenho),
         "resumo_auto": ", ".join(resumo_de_itens([i["descricao"] for i in itens])),
