@@ -46,12 +46,12 @@ function render() {
                 ${f.cnpj ? `<span class="forn-sub">CNPJ ${escapeHTML(f.cnpj)}</span>` : ''}
                 ${f.observacoes ? `<span class="forn-sub">${escapeHTML(f.observacoes)}</span>` : ''}</td>
             <td class="text-left forn-contato">${contato || `<span class="sem-contato">${ico('alert-triangle')} Sem contato cadastrado</span>`}</td>
-            <td>${f.empenhos ? `<a href="/empenhos?fornecedor=${encodeURIComponent(f.nome)}">${f.empenhos}</a>` : '<span class="muted">—</span>'}</td>
-            <td class="nowrap ${f.a_liquidar > 0.005 ? 'text-red' : 'muted'}">${f.empenhos ? fmtMoney(f.a_liquidar) : '—'}</td>
-            <td>${f.pedidos_em_aberto ? `<span class="badge info">${ico('hourglass')} ${f.pedidos_em_aberto}</span>` : '<span class="muted">—</span>'}</td>
+            <td class="num">${f.empenhos ? `<a href="/empenhos?fornecedor=${encodeURIComponent(f.nome)}">${f.empenhos}</a>` : '<span class="muted">—</span>'}</td>
+            <td class="num money">${f.empenhos ? dinheiro(f.a_liquidar) : '<span class="zero">—</span>'}</td>
+            <td class="num">${f.pedidos_em_aberto ? `<span class="badge info">${ico('hourglass')} ${f.pedidos_em_aberto}</span>` : '<span class="muted">—</span>'}</td>
             <td class="acoes">
-                <button class="btn btn-sm ${f.cadastrado ? 'btn-secondary' : 'btn-primary'}" onclick="abrirForm(${idx})">${f.cadastrado ? `${ico('pencil')} Editar` : `${ico('plus')} Cadastrar contato`}</button>
-                ${f.cadastrado ? `<button class="btn btn-sm btn-danger" title="Apagar cadastro" aria-label="Apagar cadastro de ${escapeHTML(f.nome)}" onclick="apagar(${idx})">${ico('trash')}</button>` : ''}
+                <button class="btn btn-sm btn-secondary" onclick="abrirForm(${idx})">${f.cadastrado ? `${ico('pencil')} Editar` : `${ico('plus')} Cadastrar contato`}</button>
+                ${f.cadastrado ? `<button class="btn btn-sm btn-danger btn-icone" title="Apagar cadastro" aria-label="Apagar cadastro de ${escapeHTML(f.nome)}" onclick="apagar(${idx})">${ico('trash')}</button>` : ''}
             </td>
         </tr>`;
     }).join('') : `<tr><td colspan="6" class="empty"><span class="empty-icon">${ico('truck', 'ico ico-empty')}</span>Nenhum fornecedor encontrado.</td></tr>`;
