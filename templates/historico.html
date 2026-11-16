@@ -48,13 +48,8 @@
                 </select>
                 <select id="hUsuario" class="input" aria-label="Usuário"><option value="">Todos os usuários</option></select>
             </div>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Empenho</th><th>Descrição</th></tr></thead>
-                    <tbody id="tbodyHist"></tbody>
-                </table>
-            </div>
-            <p class="muted small mt-small">Mostrando os 1.000 registros mais recentes.</p>
+            <div class="linha-tempo" id="listaHist" aria-live="polite"></div>
+            <p class="muted small mt-small" id="histNota">Mostrando os 1.000 registros mais recentes.</p>
         </section>
 
         <section class="card" id="tab-lixo" hidden>

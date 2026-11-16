@@ -1864,6 +1864,26 @@ def api_stats_empenhos():
                                   "status": resumo[pid]["status"]})
         atrasados.sort(key=lambda x: -x["dias_atraso"])
 
+    # Próximas entregas: pedidos em aberto, com prazo, ainda dentro do prazo (mais perto primeiro)
+    proximas, sem_prazo = [], 0
+    hoje = date.today()
+    ids_abertos = [pid for pid, p in resumo.items() if p["status"] in ("INCLUIDO", "PARCIAL") and not p["atrasado"]]
+    if ids_abertos:
+        meta = {r["id"]: r for r in db.execute(
+            f"SELECT p.id, p.numero_pedido, p.empenho_id, e.ne, e.nome_credor FROM pedidos p"
+            f" JOIN empenhos e ON e.id = p.empenho_id WHERE p.id IN ({_in(ids_abertos)})", tuple(ids_abertos)).fetchall()}
+        for pid in ids_abertos:
+            m, venc = meta.get(pid), parse_data(resumo[pid]["vencimento"])
+            if not m:
+                continue
+            if not venc:
+                sem_prazo += 1
+                continue
+            proximas.append({"pedido_id": pid, "numero_pedido": m["numero_pedido"], "empenho_id": m["empenho_id"],
+                             "ne": m["ne"], "nome_credor": m["nome_credor"], "vencimento": resumo[pid]["vencimento"],
+                             "dias_restantes": (venc - hoje).days, "status": resumo[pid]["status"]})
+        proximas.sort(key=lambda x: x["dias_restantes"])
+
     def pc(a, b):
         return round(a / b * 100, 2) if b else 0
 
@@ -1874,6 +1894,8 @@ def api_stats_empenhos():
         "pedidos_vencendo": sum(1 for p in resumo.values() if p["vencendo"]),
         "nfs_a_pagar": sum(q for q, _ in nfs_a_pagar_por_empenho(db).values()),
         "lista_atrasados": atrasados[:10],
+        "proximas_entregas": proximas[:8],
+        "pedidos_sem_prazo": sem_prazo,
         "valor_empenhado": empenhado,
         "valor_liquidado": liquidado,
         "valor_pago": pago,

@@ -101,7 +101,7 @@ function renderKpisEmpenho(e, f) {
         <div class="kpi accent"><div class="kpi-label">Processo</div><div class="kpi-value">${e.processo ? esc(e.processo) : '<span class="muted">—</span>'}</div>
             <div class="kpi-sub">${fmtNum(nItens)} ${nItens === 1 ? 'item' : 'itens'} no empenho</div></div>
         <div class="kpi slate"><div class="kpi-label">Empenhado</div><div class="kpi-value">${fmtMoney(f.empenhado)}</div>
-            <div class="kpi-sub">A liquidar <strong class="text-red">${fmtMoney(f.a_liquidar)}</strong></div></div>
+            <div class="kpi-sub">A liquidar <strong>${fmtMoney(f.a_liquidar)}</strong></div></div>
         <div class="kpi teal"><div class="kpi-label">Liquidado</div><div class="kpi-value">${fmtMoney(f.liquidado)}</div>
             <div class="kpi-sub">${pct(pctLiq)} do empenhado</div></div>
         <div class="kpi green"><div class="kpi-label">Pago</div><div class="kpi-value">${fmtMoney(f.pago)}</div>
@@ -164,15 +164,15 @@ function linhaEmpenho(e) {
                 ${e.pedidos_atrasados ? `<span class="badge critico" title="Pedidos com entrega vencida">${ico('alarm')} ${e.pedidos_atrasados} atrasado${e.pedidos_atrasados > 1 ? 's' : ''}</span>` : ''}
                 ${e.nfs_a_pagar ? `<span class="badge atencao" title="NFs recebidas aguardando pagamento">${ico('cash')} ${e.nfs_a_pagar} NF${e.nfs_a_pagar > 1 ? 's' : ''} a pagar</span>` : ''}</div></td>
             <td class="col-forn">${esc(e.nome_credor)}</td>
-            <td>${esc(e.processo)}</td>
+            <td class="nowrap">${esc(e.processo) || '<span class="zero">—</span>'}</td>
             <td class="num money">${fmtMoney(e.valor_empenhado)}</td>
-            <td class="num money text-teal">${fmtMoney(e.valor_liquidado)}</td>
-            <td class="num money text-green">${fmtMoney(e.valor_pago)}</td>
-            <td class="num money text-red">${fmtMoney(e.a_liquidar)}</td>
+            <td class="num money">${dinheiro(e.valor_liquidado)}</td>
+            <td class="num money">${dinheiro(e.valor_pago)}</td>
+            <td class="num money"><strong>${dinheiro(e.a_liquidar)}</strong></td>
             <td>${pctCell(e.percentual_liquidado)}</td>
             <td class="acoes">
                 <button class="btn btn-sm btn-secondary" onclick="abrirDetalhe(${e.id})">Abrir</button>
-                <button class="btn btn-sm btn-danger" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" onclick="apagarEmpenho(${e.id})">${ico('trash')}</button>
+                <button class="btn btn-sm btn-danger btn-icone" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" onclick="apagarEmpenho(${e.id})">${ico('trash')}</button>
             </td>
         </tr>`;
 }
@@ -193,7 +193,7 @@ function totaisFornecedor(lista) {
 function quadroFornecedor(nome, t) {
     const pctLiq = t.empenhado ? t.liquidado / t.empenhado * 100 : 0;
     const cor = t.atrasados ? 'red' : t.nfs ? 'amber' : t.abertos ? 'accent' : t.a_liquidar <= 0.005 && t.empenhado > 0 ? 'green' : 'slate';
-    const corBarra = { red: 'var(--red)', amber: 'var(--amber)', accent: 'var(--primary)', green: 'var(--green)', slate: 'var(--kpi-slate)' }[cor];
+    const corBarra = corPct(pctLiq);
     const selos = [
         t.atrasados && `<span class="badge critico">${ico('alarm')} ${t.atrasados} atrasado${t.atrasados > 1 ? 's' : ''}</span>`,
         t.abertos && `<span class="badge info">${ico('hourglass')} ${t.abertos} em aberto</span>`,
@@ -203,11 +203,10 @@ function quadroFornecedor(nome, t) {
     const resumo = textoResumo(t.itens);
     return `<a class="kpi kpi-link forn-card ${cor}" href="/empenhos?fornecedor=${encodeURIComponent(nome)}" data-forn="${esc(nome)}"
             title="Abrir os ${t.empenhos} empenho(s) de ${esc(nome)}">
-        <div class="forn-card-top"><span class="kpi-label">Fornecedor</span>
-            <span class="forn-card-qtd">${fmtNum(t.empenhos)} empenho${t.empenhos === 1 ? '' : 's'}</span></div>
         <h3 class="forn-card-nome">${esc(nome)}</h3>
+        <p class="forn-card-qtd">${fmtNum(t.empenhos)} empenho${t.empenhos === 1 ? '' : 's'}</p>
         <div class="forn-card-valores">
-            <div><span>A liquidar</span><strong class="${t.a_liquidar > 0.005 ? 'text-red' : 'text-green'}">${fmtMoney(t.a_liquidar)}</strong></div>
+            <div><span>A liquidar</span><strong>${dinheiro(t.a_liquidar)}</strong></div>
             <div><span>Empenhado</span><strong>${fmtMoney(t.empenhado)}</strong></div>
         </div>
         ${barraLiq(pctLiq, corBarra)}
@@ -275,8 +274,8 @@ async function renderFornAberto(nome, lista) {
                     <div class="forn-aberto-contato">${contato || `<span class="muted">Sem contato cadastrado · <a href="/fornecedores">cadastrar</a></span>`}</div></div>
                 <div class="forn-aberto-nums">
                     <div><span>Empenhado</span><strong>${fmtMoney(t.empenhado)}</strong></div>
-                    <div><span>Liquidado</span><strong class="text-teal">${fmtMoney(t.liquidado)}</strong></div>
-                    <div><span>A liquidar</span><strong class="text-red">${fmtMoney(t.a_liquidar)}</strong></div>
+                    <div><span>Liquidado</span><strong>${dinheiro(t.liquidado)}</strong></div>
+                    <div><span>A liquidar</span><strong>${dinheiro(t.a_liquidar)}</strong></div>
                 </div>
             </div>`;
         $('btnTodosForn').addEventListener('click', () => fecharFornecedor());
@@ -370,14 +369,14 @@ function renderEmpenhosCartoes(lista) {
             ${resumo ? `<p class="ec-itens">${esc(resumo)}</p>` : ''}
             <div class="ec-nums">
                 <div><span>Empenhado</span><strong>${fmtMoney(e.valor_empenhado)}</strong></div>
-                <div><span>Liquidado</span><strong class="text-teal">${fmtMoney(e.valor_liquidado)}</strong></div>
-                <div><span>Pago</span><strong class="text-green">${fmtMoney(e.valor_pago)}</strong></div>
-                <div><span>A liquidar</span><strong class="text-red">${fmtMoney(e.a_liquidar)}</strong></div>
+                <div><span>Liquidado</span><strong>${dinheiro(e.valor_liquidado)}</strong></div>
+                <div><span>Pago</span><strong>${dinheiro(e.valor_pago)}</strong></div>
+                <div class="ec-dest"><span>A liquidar</span><strong>${dinheiro(e.a_liquidar)}</strong></div>
             </div>
             <div class="ec-rodape">
                 <div class="ec-barra"><div class="bar"><span style="width:${p}%;background:${corPct(p)}"></span></div><span class="small muted">${pct(p)} liquidado</span></div>
                 <div class="ec-acoes">
-                    <button class="btn btn-sm btn-danger" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" data-apagar="${e.id}">${ico('trash')}</button>
+                    <button class="btn btn-sm btn-danger btn-icone" title="Apagar empenho" aria-label="Apagar empenho ${esc(e.ne)}" data-apagar="${e.id}">${ico('trash')}</button>
                     <button class="btn btn-sm btn-primary" data-abrir="${e.id}">Abrir ${ico('arrow-right')}</button>
                 </div>
             </div>
@@ -487,6 +486,12 @@ function voltarLista({ pushUrl = true } = {}) {
     carregarLista().catch(err => toast(err.message, 'error'));
 }
 
+/** Nome curto de um item ("Tomate italiano") a partir do que já está carregado no empenho aberto. */
+function nomeItem(itemId, descricao) {
+    const it = (estado.itens || []).find(x => x.id === itemId);
+    return (it && it.nome_curto) || descricao || '';
+}
+
 function aplicarVisaoDet() {
     const cards = estado.visaoDet === 'cards';
     document.querySelectorAll('[data-visao-det]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.visaoDet === estado.visaoDet)));
@@ -520,12 +525,12 @@ function renderItensCartoes(itens) {
             <div class="ic-valor">
                 <strong>${fmtMoney(i.valor_total)}</strong>
                 <span class="muted small">${fmtMoney(i.valor_unitario)}${und ? ` / ${und}` : ''}</span>
-                <span class="small text-teal">liquidado ${fmtMoney(i.liquidado)} · ${pct(i.percentual_liquidado)}</span>
+                <span class="small muted">liquidado ${fmtMoney(i.liquidado)} · ${pct(i.percentual_liquidado)}</span>
             </div>
             <div class="ic-acoes">
-                <button class="btn btn-sm btn-secondary" title="Editar item" aria-label="Editar item ${esc(i.numero_item)}" onclick="editarItem(${i.id})">${ico('pencil')}</button>
-                <button class="btn btn-sm btn-secondary" title="Reforço ou anulação de quantidade" aria-label="Reforço ou anulação" onclick="abrirMovimento(${i.id})">${ico('plus-minus')}</button>
-                <button class="btn btn-sm btn-danger" title="Excluir item" aria-label="Excluir item ${esc(i.numero_item)}" onclick="excluirItem(${i.id})">${ico('trash')}</button>
+                <button class="btn btn-sm btn-secondary btn-icone" title="Editar item" aria-label="Editar item ${esc(i.numero_item)}" onclick="editarItem(${i.id})">${ico('pencil')}</button>
+                <button class="btn btn-sm btn-secondary btn-icone" title="Reforço ou anulação de quantidade" aria-label="Reforço ou anulação" onclick="abrirMovimento(${i.id})">${ico('plus-minus')}</button>
+                <button class="btn btn-sm btn-danger btn-icone" title="Excluir item" aria-label="Excluir item ${esc(i.numero_item)}" onclick="excluirItem(${i.id})">${ico('trash')}</button>
             </div>
         </div>`;
     }).join('') : `<div class="empty-card"><span class="empty-icon">${ico('file-text', 'ico ico-empty')}</span>Nenhum item. Clique em "Itens".</div>`;
@@ -539,21 +544,21 @@ function renderItens() {
     $('tbodyItens').innerHTML = itens.length ? itens.map(i => `
         <tr>
             <td>${esc(i.numero_item)}</td>
-            <td class="text-left"><strong>${esc(i.descricao)}</strong></td>
+            <td class="text-left td-item" title="${esc(i.descricao)}"><strong>${esc(i.nome_curto || i.descricao)}</strong>${i.nome_curto ? `<span class="td-item-desc">${esc(i.descricao)}</span>` : ''}</td>
             <td>${esc(i.und)}</td>
             <td class="num">${fmtNum(i.qtde_empenhada)}</td>
             <td class="num money">${fmtMoney(i.valor_unitario)}</td>
             <td class="num money">${fmtMoney(i.valor_total)}</td>
             <td class="num">${fmtNum(i.qtde_recebida)}</td>
-            <td class="num ${i.saldo_fisico <= EPS ? 'text-green' : 'text-amber'}"><strong>${fmtNum(i.saldo_fisico)}</strong></td>
+            <td class="num ${i.saldo_fisico <= EPS ? 'text-green' : ''}"><strong>${fmtNum(i.saldo_fisico)}</strong></td>
             <td class="num" title="${i.reservado > 0 ? `${fmtNum(i.reservado)} reservado(s) em pedidos abertos` : ''}">
                 <strong>${fmtNum(i.saldo_a_pedir)}</strong>${i.reservado > 0 ? `<div class="muted small">${fmtNum(i.reservado)} em pedido</div>` : ''}</td>
-            <td class="num money text-teal">${fmtMoney(i.liquidado)}</td>
+            <td class="num money">${dinheiro(i.liquidado)}</td>
             <td>${pctCell(i.percentual_liquidado)}</td>
             <td class="acoes">
-                <button class="btn btn-sm btn-secondary" title="Editar item" aria-label="Editar item" onclick="editarItem(${i.id})">${ico('pencil')}</button>
-                <button class="btn btn-sm btn-secondary" title="Reforço ou anulação de quantidade" aria-label="Reforço ou anulação" onclick="abrirMovimento(${i.id})">${ico('plus-minus')}</button>
-                <button class="btn btn-sm btn-danger" title="Excluir item" aria-label="Excluir item" onclick="excluirItem(${i.id})">${ico('trash')}</button>
+                <button class="btn btn-sm btn-secondary btn-icone" title="Editar item" aria-label="Editar item" onclick="editarItem(${i.id})">${ico('pencil')}</button>
+                <button class="btn btn-sm btn-secondary btn-icone" title="Reforço ou anulação de quantidade" aria-label="Reforço ou anulação" onclick="abrirMovimento(${i.id})">${ico('plus-minus')}</button>
+                <button class="btn btn-sm btn-danger btn-icone" title="Excluir item" aria-label="Excluir item" onclick="excluirItem(${i.id})">${ico('trash')}</button>
             </td>
         </tr>`).join('') : `<tr><td colspan="12" class="empty"><span class="empty-icon">${ico('file-text', 'ico ico-empty')}</span>Nenhum item. Clique em "Itens".</td></tr>`;
     $('btnNovoPedido').disabled = !estado.itens.some(i => i.saldo_a_pedir > EPS);
@@ -587,17 +592,17 @@ const STATUS = {
 
 function acoesPedido(p, aberto) {
     return `${aberto ? `<button class="btn btn-sm btn-primary" onclick="abrirRecebimento(${p.id})">${ico('package-import')} Receber</button>` : ''}
-        <button class="btn btn-sm btn-secondary" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">${ico('file-type-pdf')}</button>
+        <button class="btn btn-sm btn-secondary btn-icone" onclick="baixarPdf(${p.id})" title="PDF do pedido para o fornecedor" aria-label="PDF do pedido">${ico('file-type-pdf')}</button>
         <button class="btn btn-sm btn-secondary${p.enviado_em ? ' btn-enviado' : ''}" onclick="enviarPedido(${p.id})"
             title="${p.enviado_em ? `E-mail aberto em ${dataBR(p.enviado_em)}${p.enviado_por ? ` por ${esc(p.enviado_por)}` : ''} — clique para enviar de novo` : 'Enviar o pedido por e-mail ao fornecedor'}"
             aria-label="Enviar pedido por e-mail">${ico('send')}${p.enviado_em ? `<span class="pill ok">${ico('check', 'ico ico-xs')}</span>` : (aberto ? ' Enviar' : '')}</button>
         ${p.qt_nfs > 0 ? `<button class="btn btn-sm ${p.qt_nfs_a_pagar ? 'btn-attention' : 'btn-secondary'}" onclick="verNfs(${p.id})"
             title="${p.qt_nfs_a_pagar ? `${p.qt_nfs_a_pagar} NF(s) aguardando pagamento — clique para marcar como paga` : 'Todas as NFs pagas'}"
             aria-label="Notas fiscais">${ico('file-invoice')} NFs ${p.qt_nfs_a_pagar ? `<span class="pill">${p.qt_nfs_a_pagar} a pagar</span>` : `<span class="pill ok" title="Todas as NFs pagas">${ico('check', 'ico ico-xs')}</span>`}</button>` : ''}
-        <button class="btn btn-sm btn-secondary" onclick="editarPedido(${p.id})" title="Editar pedido" aria-label="Editar pedido">${ico('pencil')}</button>
-        ${aberto ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, false)" title="Encerrar: o que falta não virá e volta ao saldo a pedir" aria-label="Encerrar pedido">${ico('lock')}</button>` : ''}
-        ${p.status === 'ENCERRADO' ? `<button class="btn btn-sm btn-secondary" onclick="encerrarPedido(${p.id}, true)" title="Reabrir pedido" aria-label="Reabrir pedido">${ico('lock-open')}</button>` : ''}
-        <button class="btn btn-sm btn-danger" title="Excluir pedido" aria-label="Excluir pedido" onclick="excluirPedido(${p.id})">${ico('trash')}</button>`;
+        <button class="btn btn-sm btn-secondary btn-icone" onclick="editarPedido(${p.id})" title="Editar pedido" aria-label="Editar pedido">${ico('pencil')}</button>
+        ${aberto ? `<button class="btn btn-sm btn-secondary btn-icone" onclick="encerrarPedido(${p.id}, false)" title="Encerrar: o que falta não virá e volta ao saldo a pedir" aria-label="Encerrar pedido">${ico('lock')}</button>` : ''}
+        ${p.status === 'ENCERRADO' ? `<button class="btn btn-sm btn-secondary btn-icone" onclick="encerrarPedido(${p.id}, true)" title="Reabrir pedido" aria-label="Reabrir pedido">${ico('lock-open')}</button>` : ''}
+        <button class="btn btn-sm btn-danger btn-icone" title="Excluir pedido" aria-label="Excluir pedido" onclick="excluirPedido(${p.id})">${ico('trash')}</button>`;
 }
 
 function renderPedidosCartoes(pedidos) {
@@ -655,7 +660,7 @@ function renderObsAntigas() {
             <div><strong>OBs lançadas no modo antigo (${fmtMoney(total)})</strong>
             <div class="muted small">Elas não entram mais no "Pago". Marque as NFs correspondentes como pagas e depois exclua estes lançamentos.</div></div>
             <ul>${obs.map(o => `<li><span>OB <strong>${esc(o.ob)}</strong> · ${dataBR(o.data_pagamento)} · ${fmtMoney(o.valor)}${o.nf ? ` · NF ${esc(o.nf)}` : ''}</span>
-                <button class="btn btn-sm btn-danger" onclick="excluirObAntiga(${o.id})" aria-label="Excluir OB ${esc(o.ob)}">${ico('trash')}</button></li>`).join('')}</ul>
+                <button class="btn btn-sm btn-danger btn-icone" onclick="excluirObAntiga(${o.id})" aria-label="Excluir OB ${esc(o.ob)}">${ico('trash')}</button></li>`).join('')}</ul>
         </div>`;
 }
 
@@ -694,7 +699,7 @@ function criarLinha(id = null, numero_item = '', descricao = '', und = '', qtde 
         <td><input class="inp-item" data-f="und" value="${esc(und)}" placeholder="CX" aria-label="Unidade"></td>
         <td><input class="inp-item num-input" data-f="qtde_empenhada" value="${esc(qtde)}" inputmode="decimal" aria-label="Quantidade"></td>
         <td><input class="inp-item num-input" data-f="valor_unitario" value="${esc(vunit)}" inputmode="decimal" aria-label="Valor unitário"></td>
-        <td><button class="btn btn-sm btn-danger" type="button" aria-label="Remover linha" onclick="removerLinha(this)">${ico('x')}</button></td>`;
+        <td><button class="btn btn-sm btn-danger btn-icone" type="button" aria-label="Remover linha" onclick="removerLinha(this)">${ico('x')}</button></td>`;
     tr.querySelectorAll('.num-input').forEach(inp => inp.addEventListener('input', recalcularTotalItens));
     $('tbodyItemEdit').appendChild(tr);
     recalcularTotalItens();
@@ -878,13 +883,23 @@ function montarPedItens(pedidoInfo = null) {
     }).filter(l => l.p || l.max > EPS);
     box.innerHTML = linhas.length ? linhas.map(({ i, p, recebido, max }) => `
         <div class="ped-item">
-            <label for="ped-${i.id}">${esc(i.numero_item)} • ${esc(i.descricao)}
-                <span class="muted">— máx. ${fmtNum(max)} ${esc(i.und)}${recebido ? ` (já recebido ${fmtNum(recebido)})` : ''} · ${fmtMoney(i.valor_unitario)}/${esc(i.und) || 'un'}</span></label>
-            <input id="ped-${i.id}" type="text" inputmode="decimal" placeholder="Qtde pedida" data-item="${i.id}"
+            <label for="ped-${i.id}" title="${esc(i.descricao)}"><span class="ic-num">${esc(i.numero_item) || '—'}</span> <strong>${esc(i.nome_curto || i.descricao)}</strong>
+                <span class="muted">saldo ${fmtNum(max)} ${esc(i.und)}${recebido ? ` (já recebido ${fmtNum(recebido)})` : ''} · ${fmtMoney(i.valor_unitario)}/${esc(i.und) || 'un'}</span></label>
+            <div class="ped-item-campo">
+                <input id="ped-${i.id}" type="text" inputmode="decimal" placeholder="0" data-item="${i.id}" aria-label="Quantidade pedida de ${esc(i.nome_curto || i.descricao)}"
                    data-max="${max}" data-min="${recebido}" data-vu="${i.valor_unitario}" value="${p ? numParaCampo(p.qtde_pedida) : ''}">
+                <span class="ped-item-und">${esc(i.und)}</span>
+                <button type="button" class="btn btn-link btn-sm" data-tudo="${i.id}" title="Pedir todo o saldo deste item">tudo</button>
+            </div>
         </div>`).join('') + `<div class="item-total">Valor do pedido: <strong id="pedTotal">R$ 0,00</strong></div>`
         : '<p class="muted">— Nenhum item com saldo a pedir. —</p>';
     box.querySelectorAll('input[data-item]').forEach(inp => inp.addEventListener('input', totalPedido));
+    box.querySelectorAll('[data-tudo]').forEach(b => b.addEventListener('click', () => {
+        const inp = $(`ped-${b.dataset.tudo}`);
+        inp.value = numParaCampo(parseFloat(inp.dataset.max));
+        totalPedido();
+        inp.focus();
+    }));
     totalPedido();
     $('btnSalvarPedido').disabled = !linhas.length;
 }
@@ -895,11 +910,21 @@ function totalPedido() {
     if ($('pedTotal')) $('pedTotal').textContent = fmtMoney(t);
 }
 
+/** Sugere o próximo número de pedido do empenho (PED-001, PED-002…), seguindo o padrão do último. */
+function proximoNumeroPedido() {
+    let maior = 0, prefixo = 'PED-', casas = 3;
+    (estado.pedidos || []).forEach(p => {
+        const m = /^(.*?)(\d+)\s*$/.exec(p.numero_pedido || '');
+        if (m && +m[2] >= maior) { maior = +m[2]; prefixo = m[1]; casas = Math.max(m[2].length, 1); }
+    });
+    return `${prefixo}${String(maior + 1).padStart(casas, '0')}`;
+}
+
 function abrirNovoPedido() {
     estado.pedidoEditando = null;
     $('pedTitulo').textContent = 'Novo Pedido';
     $('btnSalvarPedido').textContent = 'Salvar Pedido';
-    $('mPedNum').value = ''; $('mPedObs').value = ''; $('mPedData').value = hoje(); $('mPedPrazo').value = 30;
+    $('mPedNum').value = proximoNumeroPedido(); $('mPedObs').value = ''; $('mPedData').value = hoje(); $('mPedPrazo').value = 30;
     atualizarVencimento();
     montarPedItens();
     abrirModal('modalPedido');
@@ -993,14 +1018,14 @@ async function verNfs(id) {
                         ? `<button class="btn btn-sm btn-secondary" onclick="pagarNf(${idx}, false)" title="Desmarcar o pagamento desta NF">${ico('arrow-back-up')} Desfazer</button>`
                         : `<button class="btn btn-sm btn-success" onclick="pagarNf(${idx}, true)">${ico('check')} Marcar como paga</button>`}
                     <button class="btn btn-sm btn-secondary" onclick="abrirCorrecaoNf(${idx})" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para corrigir"' : ''}>${ico('pencil')} Corrigir</button>
-                    <button class="btn btn-sm btn-danger" onclick="excluirNf(${idx})" aria-label="Excluir NF" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para excluir"' : ''}>${ico('trash')}</button>
+                    <button class="btn btn-sm btn-danger btn-icone" onclick="excluirNf(${idx})" aria-label="Excluir NF" ${nf.pago_em ? 'disabled title="Desfaça o pagamento para excluir"' : ''}>${ico('trash')}</button>
                 </div>
             </div>
             ${nf.observacoes ? `<div class="muted small">Obs.: ${esc(nf.observacoes)}</div>` : ''}
             <table class="nf-table">
                 <thead><tr><th>Item</th><th>Descrição</th><th>Und</th><th class="num">Qtde</th><th class="num">Valor</th></tr></thead>
                 <tbody>${nf.itens.map(i => `
-                    <tr><td>${esc(i.numero_item)}</td><td>${esc(i.descricao)}</td><td>${esc(i.und)}</td>
+                    <tr><td>${esc(i.numero_item)}</td><td title="${esc(i.descricao)}"><strong>${esc(nomeItem(i.item_id, i.descricao))}</strong></td><td>${esc(i.und)}</td>
                         <td class="num">${fmtNum(i.qtde_recebida)}</td><td class="num">${fmtMoney(i.qtde_recebida * i.valor_unitario)}</td></tr>`).join('')}
                 </tbody>
             </table>
@@ -1020,22 +1045,31 @@ function montarRecebItens(d, nf = null) {
         return { i, pendente, atual: devolve };
     });
     const temPendente = linhas.some(l => l.pendente > EPS);
-    $('rItens').innerHTML = (temPendente ? '' : '<p class="muted">Todos os itens deste pedido já foram recebidos.</p>') + linhas.map(({ i, pendente, atual }) => {
+    $('rItens').innerHTML = (temPendente
+        ? `<div class="rec-tudo"><span class="muted small">Informe o que chegou em cada item.</span>
+            <button type="button" class="btn btn-sm btn-secondary" id="recTudoGeral">${ico('check')} Chegou tudo o que faltava</button></div>`
+        : '<p class="muted">Todos os itens deste pedido já foram recebidos.</p>') + linhas.map(({ i, pendente, atual }) => {
         const fechado = pendente <= EPS;
         return `
         <div class="ped-item ${fechado ? 'is-done' : ''}">
-            <label for="rec-${i.item_id}">${esc(i.numero_item)} • ${esc(i.descricao)}
-                <span class="muted">— pedido ${fmtNum(i.qtde_pedida)} ${esc(i.und)}, já recebido ${fmtNum(i.qtde_recebida - atual)}</span></label>
+            <label for="rec-${i.item_id}" title="${esc(i.descricao)}"><span class="ic-num">${esc(i.numero_item) || '—'}</span> <strong>${esc(nomeItem(i.item_id, i.descricao))}</strong>
+                <span class="muted">pedido ${fmtNum(i.qtde_pedida)} ${esc(i.und)} · já recebido ${fmtNum(i.qtde_recebida - atual)}${fechado ? '' : ` · falta ${fmtNum(pendente)}`}</span></label>
             ${fechado ? '<span class="badge ok">Recebido por completo</span>' : `
-            <div class="input-hint">
-                <input id="rec-${i.item_id}" type="text" inputmode="decimal" placeholder="Qtde recebida" data-item="${i.item_id}"
+            <div class="ped-item-campo">
+                <input id="rec-${i.item_id}" type="text" inputmode="decimal" placeholder="0" data-item="${i.item_id}" aria-label="Quantidade recebida"
                        data-max="${pendente}" data-vu="${i.valor_unitario}" value="${atual ? numParaCampo(atual) : ''}">
-                <button type="button" class="btn btn-sm btn-secondary" data-tudo="${pendente}">Tudo (${fmtNum(pendente)})</button>
+                <span class="ped-item-und">${esc(i.und)}</span>
+                <button type="button" class="btn btn-link btn-sm" data-tudo="${pendente}" title="Chegou tudo o que faltava (${fmtNum(pendente)})">tudo</button>
             </div>`}
         </div>`;
     }).join('');
-    $('rItens').querySelectorAll('[data-tudo]').forEach(b => b.addEventListener('click', () => {
-        b.previousElementSibling.value = numParaCampo(b.dataset.tudo); totalRecebimento();
+    const geral = $('recTudoGeral');
+    if (geral) geral.addEventListener('click', () => {
+        $('rItens').querySelectorAll('.ped-item-campo').forEach(c => { c.querySelector('input').value = numParaCampo(c.querySelector('[data-tudo]').dataset.tudo); });
+        totalRecebimento();
+    });
+    $('rItens').querySelectorAll('.ped-item [data-tudo]').forEach(b => b.addEventListener('click', () => {
+        b.parentElement.querySelector('input').value = numParaCampo(b.dataset.tudo); totalRecebimento();
     }));
     $('rItens').querySelectorAll('input[data-item]').forEach(inp => inp.addEventListener('input', totalRecebimento));
     totalRecebimento();

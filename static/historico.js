@@ -12,13 +12,13 @@ const ACAO_ROTULO = {
 const TIPO_ROTULO = { empenho: ['receipt', 'Empenho'], item: ['file-text', 'Item'], pedido: ['clipboard-list', 'Pedido'], nf: ['file-invoice', 'NF'], pagamento: ['cash', 'Pagamento'], fornecedor: ['truck', 'Fornecedor'] };
 
 async function carregar() {
-    $('tbodyHist').innerHTML = linhaCarregando(5);
+    $('listaHist').innerHTML = `<p class="loading-row"><span class="spinner"></span> Carregando…</p>`;
     $('tbodyLixo').innerHTML = linhaCarregando(5);
     try {
         [H.hist, H.lixo] = await Promise.all([fetchJSON('/api/historico?limite=1000'), fetchJSON('/api/lixeira')]);
     } catch (err) {
         showToast(err.message, 'error');
-        $('tbodyHist').innerHTML = `<tr><td colspan="5" class="empty">${escapeHTML(err.message)}</td></tr>`;
+        $('listaHist').innerHTML = `<div class="empty">${escapeHTML(err.message)}</div>`;
         return;
     }
     const usuarios = [...new Set(H.hist.map(h => h.usuario).filter(Boolean))].sort();
@@ -27,21 +27,52 @@ async function carregar() {
     renderLixo();
 }
 
+/** "Hoje", "Ontem" ou "quinta-feira, 12 de novembro de 2026". */
+function rotuloDia(iso) {
+    const [a, m, d] = iso.split('-').map(Number);
+    const dia = new Date(a, m - 1, d), hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    const diff = Math.round((hoje - dia) / 86400000);
+    if (diff === 0) return 'Hoje';
+    if (diff === 1) return 'Ontem';
+    const t = dia.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: a === hoje.getFullYear() ? undefined : 'numeric' });
+    return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/** Histórico como linha do tempo, agrupado por dia (lê-se como um diário, não como planilha). */
 function renderHist() {
     const busca = normalizar($('hBusca').value.trim()), acao = $('hAcao').value, usuario = $('hUsuario').value;
     const lista = H.hist.filter(h =>
         (!acao || h.acao === acao) && (!usuario || h.usuario === usuario) &&
         (!busca || normalizar(`${h.descricao} ${h.ne || ''} ${h.usuario}`).includes(busca)));
-    $('tbodyHist').innerHTML = lista.length ? lista.map(h => {
-        const [icone, rot, cls] = ACAO_ROTULO[h.acao] || ['history', h.acao, 'neutro'];
-        return `<tr>
-            <td class="nowrap">${dataBR(h.quando)}</td>
-            <td>${escapeHTML(h.usuario)}</td>
-            <td><span class="badge ${cls}">${ico(icone)} ${rot}</span></td>
-            <td>${h.ne ? `<a href="/empenhos?id=${h.empenho_id}">${escapeHTML(h.ne)}</a>` : '<span class="muted">—</span>'}</td>
-            <td class="text-left">${escapeHTML(h.descricao)}</td>
-        </tr>`;
-    }).join('') : `<tr><td colspan="5" class="empty">Nenhum registro encontrado.</td></tr>`;
+    $('histNota').textContent = lista.length === H.hist.length
+        ? `${fmtNum(lista.length)} registros${H.hist.length >= 1000 ? ' (os 1.000 mais recentes)' : ''}.`
+        : `${fmtNum(lista.length)} de ${fmtNum(H.hist.length)} registros.`;
+    if (!lista.length) {
+        $('listaHist').innerHTML = `<div class="empty"><span class="empty-icon">${ico('history', 'ico ico-empty')}</span>Nenhum registro encontrado.</div>`;
+        return;
+    }
+    const dias = new Map();
+    lista.forEach(h => {
+        const k = (h.quando || '').slice(0, 10);
+        if (!dias.has(k)) dias.set(k, []);
+        dias.get(k).push(h);
+    });
+    $('listaHist').innerHTML = [...dias.entries()].map(([dia, regs]) => `
+        <section class="lt-dia">
+            <h4 class="lt-data">${rotuloDia(dia)} <span class="count-badge">${regs.length}</span></h4>
+            <ol class="lt-lista">${regs.map(h => {
+                const [icone, rot, cls] = ACAO_ROTULO[h.acao] || ['history', h.acao, 'neutro'];
+                return `<li class="lt-item">
+                    <span class="lt-ico ${cls}" title="${rot}">${ico(icone)}</span>
+                    <div class="lt-corpo">
+                        <p class="lt-desc">${escapeHTML(h.descricao)}</p>
+                        <p class="lt-meta"><span class="lt-acao">${rot}</span><span>${(h.quando || '').slice(11, 16)}</span><span>${escapeHTML(h.usuario)}</span>${h.ne
+                            ? `<a href="/empenhos?id=${h.empenho_id}">${escapeHTML(h.ne)}</a>` : ''}</p>
+                    </div>
+                </li>`;
+            }).join('')}</ol>
+        </section>`).join('');
 }
 
 function renderLixo() {

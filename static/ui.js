@@ -41,11 +41,15 @@ function parseNumBR(v) {
     return Number.isFinite(n) ? n : 0;
 }
 
-/** Cor do percentual executado: verde (>=90), âmbar (>=50), vermelho. */
+/** Cor das barras de progresso: uma só (azul do "liquidado"); verde quando completa.
+ *  Percentual baixo não é erro, então nada de vermelho aqui: vermelho fica para atraso. */
 function corPct(v) {
-    if (v >= 90) return 'var(--green)';
-    if (v >= 50) return 'var(--amber)';
-    return 'var(--red)';
+    return v >= 99.95 ? 'var(--green)' : 'var(--liq)';
+}
+
+/** Valor em R$ para tabelas e cartões: zero aparece apagado, para o olho ir direto ao que importa. */
+function dinheiro(v) {
+    return Math.abs(v || 0) < 0.005 ? `<span class="zero">${fmtMoney(0)}</span>` : fmtMoney(v);
 }
 
 /** Célula de % com mini barra de progresso. */
@@ -162,3 +166,17 @@ function marcarPendencias(s) {
     el.title = txt;
     el.setAttribute('aria-label', txt);
 }
+
+/** Botão "×" no canto de todo modal (além do Cancelar, do Esc e do clique fora). */
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.modal > .modal-box').forEach(box => {
+        if (box.querySelector('.modal-x')) return;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'modal-x';
+        b.setAttribute('aria-label', 'Fechar');
+        b.innerHTML = ico('x');
+        b.addEventListener('click', () => { box.closest('.modal').style.display = 'none'; });
+        box.prepend(b);
+    });
+});

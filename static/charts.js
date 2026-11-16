@@ -69,7 +69,7 @@ function graficoRanking(el, linhas, cor, msgVazio) {
             <span class="rank-pos">${i + 1}</span>
             <div class="rank-body">
                 <div class="rank-top">
-                    <span class="rank-label">${escapeHTML(l.label)}</span>
+                    ${l.href ? `<a class="rank-label" href="${l.href}">${escapeHTML(l.label)}</a>` : `<span class="rank-label">${escapeHTML(l.label)}</span>`}
                     <strong class="rank-val">${escapeHTML(l.texto)}</strong>
                 </div>
                 <div class="bar"><span style="width:${(l.value / max) * 100}%;background:${cor}"></span></div>
