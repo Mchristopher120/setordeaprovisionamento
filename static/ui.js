@@ -180,3 +180,20 @@ document.addEventListener('DOMContentLoaded', () => {
         box.prepend(b);
     });
 });
+
+/** Nota do fornecedor (0 a 10) = % de pedidos entregues no prazo, com o prazo médio real ao lado. */
+function notaFornecedorHTML(f, compacto = false) {
+    const um = (v) => new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v);
+    const prazo = f.prazo_medio !== null && f.prazo_medio !== undefined
+        ? `entrega em ${um(f.prazo_medio)} dia${f.prazo_medio === 1 ? '' : 's'} em média` : '';
+    if (f.nota === null || f.nota === undefined) {
+        return prazo ? `<span class="nota-forn"><span class="nota-sub">${prazo}<br>sem pedidos com prazo para dar nota</span></span>`
+            : '<span class="muted">—</span>';
+    }
+    const cls = f.nota >= 8 ? 'ok' : f.nota >= 6 ? 'atencao' : 'critico';
+    const dica = `${f.no_prazo} de ${f.avaliados} pedido(s) com prazo foram entregues em dia` +
+        (f.atrasados_abertos ? ` (${f.atrasados_abertos} em atraso agora)` : '');
+    return `<span class="nota-forn" title="${escapeHTML(dica)}">
+        <span class="nota-num ${cls}">${ico('star')}${um(f.nota)}</span>
+        <span class="nota-sub">${f.no_prazo} de ${f.avaliados} no prazo${compacto || !prazo ? '' : `<br>${prazo}`}${compacto && prazo ? ` · ${prazo}` : ''}</span></span>`;
+}

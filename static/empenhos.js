@@ -62,6 +62,7 @@ async function carregarLista() {
         fetchJSON('/api/stats_empenhos'),
     ]);
     estado.empenhos = empenhos;
+    estado.contatos = null; // contato e nota do fornecedor são buscados de novo (podem ter mudado)
     marcarPendencias(stats);
     if (!estado.empenhoId) renderKpis(stats); // com um empenho aberto, os cartões mostram os números dele
     preencherAnos();
@@ -268,10 +269,14 @@ async function renderFornAberto(nome, lista) {
             c.telefone && `<span>${ico('phone')} <a href="tel:${esc(c.telefone.replace(/\D/g, ''))}">${esc(c.telefone)}</a></span>`,
         ].filter(Boolean).join('') : '';
         el.innerHTML = `
-            <button type="button" class="btn btn-link btn-sm" id="btnTodosForn">${ico('arrow-left')} Todos os fornecedores</button>
+            <div class="forn-aberto-topo">
+                <button type="button" class="btn btn-link btn-sm" id="btnTodosForn">${ico('arrow-left')} Todos os fornecedores</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnPdfForn" title="PDF com a situação dos empenhos deste fornecedor">${ico('file-type-pdf')} PDF da situação</button>
+            </div>
             <div class="forn-aberto-linha">
                 <div><h4>${esc(nome)}</h4>
-                    <div class="forn-aberto-contato">${contato || `<span class="muted">Sem contato cadastrado · <a href="/fornecedores">cadastrar</a></span>`}</div></div>
+                    <div class="forn-aberto-contato">${contato || `<span class="muted">Sem contato cadastrado · <a href="/fornecedores">cadastrar</a></span>`}</div>
+                    ${c && (c.nota !== null && c.nota !== undefined || c.prazo_medio !== null && c.prazo_medio !== undefined) ? `<div class="forn-aberto-nota">${notaFornecedorHTML(c, true)}</div>` : ''}</div>
                 <div class="forn-aberto-nums">
                     <div><span>Empenhado</span><strong>${fmtMoney(t.empenhado)}</strong></div>
                     <div><span>Liquidado</span><strong>${dinheiro(t.liquidado)}</strong></div>
@@ -279,6 +284,7 @@ async function renderFornAberto(nome, lista) {
                 </div>
             </div>`;
         $('btnTodosForn').addEventListener('click', () => fecharFornecedor());
+        $('btnPdfForn').addEventListener('click', () => abrirRelatorios({ fornecedor: nome }));
     };
     montar(estado.contatos ? estado.contatos.find(c => c.nome === nome) : null);
     if (!estado.contatos) {
@@ -928,9 +934,50 @@ function abrirNovoPedido() {
     atualizarVencimento();
     montarPedItens();
     abrirModal('modalPedido');
+    carregarSugestaoPedido();
+}
+
+/** Sugestão de pedido: repetir o último ou usar a média dos últimos, sempre dentro do saldo de cada item. */
+async function carregarSugestaoPedido() {
+    const box = $('mPedSugestao');
+    box.hidden = true;
+    const eid = estado.empenhoId;
+    let d;
+    try { d = await fetchJSON(`/api/empenhos/${eid}/sugestao_pedido`); } catch { return; }
+    if (estado.pedidoEditando || eid !== estado.empenhoId || !d.ok || !d.opcoes.length) return;
+    box.hidden = false;
+    box.innerHTML = `<span class="ped-sug-tit">${ico('bulb')} Sugestão de pedido</span>` + d.opcoes.map((o, i) =>
+        `<button type="button" class="chip" data-sug="${i}">${esc(o.rotulo)}</button>`).join('') +
+        `<button type="button" class="btn btn-link btn-sm" data-sug-limpar hidden>limpar</button>`;
+    box.querySelectorAll('[data-sug]').forEach(b => b.addEventListener('click', () => {
+        const o = d.opcoes[+b.dataset.sug];
+        let preenchidos = 0, cortados = 0, semSaldo = 0;
+        document.querySelectorAll('#mPedItens input[data-item]').forEach(inp => { inp.value = ''; });
+        Object.entries(o.itens).forEach(([iid, q]) => {
+            const inp = $(`ped-${iid}`);
+            if (!inp) { semSaldo++; return; }
+            const max = parseFloat(inp.dataset.max);
+            if (q > max + EPS) cortados++;
+            inp.value = numParaCampo(Math.min(q, max));
+            preenchidos++;
+        });
+        if (o.prazo_dias) { $('mPedPrazo').value = o.prazo_dias; atualizarVencimento(); }
+        totalPedido();
+        box.querySelectorAll('[data-sug]').forEach(x => x.classList.toggle('ativo', x === b));
+        box.querySelector('[data-sug-limpar]').hidden = false;
+        const extra = [cortados && `${cortados} reduzido(s) ao saldo`, semSaldo && `${semSaldo} sem saldo`].filter(Boolean).join(' · ');
+        toast(`${preenchidos} item(ns) preenchido(s)${extra ? ` (${extra})` : ''}. Ajuste o que precisar.`, extra ? '' : 'success');
+    }));
+    box.querySelector('[data-sug-limpar]').addEventListener('click', (ev) => {
+        document.querySelectorAll('#mPedItens input[data-item]').forEach(inp => { inp.value = ''; });
+        totalPedido();
+        box.querySelectorAll('[data-sug]').forEach(x => x.classList.remove('ativo'));
+        ev.currentTarget.hidden = true;
+    });
 }
 
 async function editarPedido(id) {
+    $('mPedSugestao').hidden = true;
     let d;
     try { d = await fetchJSON(`/api/pedidos/${id}`); } catch (err) { toast(err.message, 'error'); return; }
     if (!d.ok) { toast(d.error, 'error'); return; }
@@ -1282,6 +1329,11 @@ async function enviarPedido(pid) {
         ? `${ico('alert-triangle')} <span>${esc(d.fornecedor)} está sem e-mail cadastrado. Digite o e-mail abaixo (ele pode ser salvo no cadastro) ou cadastre em <a href="/fornecedores">Fornecedores</a>.</span>` : '';
     $('envSalvarBox').hidden = true;
     $('envSalvar').checked = true;
+    // Envio direto pelo sistema (quando o servidor tem SMTP configurado): vira a opção principal
+    $('envDireto').hidden = !d.envio_direto;
+    $('envDiretoDica').hidden = !!d.envio_direto;
+    $('envGmail').classList.toggle('destaque', !d.envio_direto);
+    if (d.envio_direto) $('envDiretoSub').textContent = `Sai de ${d.remetente} com o PDF do pedido anexado. Não precisa abrir o e-mail.`;
     $('envEnviado').textContent = d.enviado_em ? `Último envio preparado em ${dataBR(d.enviado_em)}${d.enviado_por ? ` por ${d.enviado_por}` : ''}.` : '';
     abrirModal('modalEnviar');
     setTimeout(() => (semEmail ? $('envPara') : $('envCorpo')).focus(), 40);
@@ -1310,8 +1362,28 @@ async function aposAbrirEmail(meio) {
             if (r && r.ok) { toast('E-mail salvo no cadastro do fornecedor', 'success'); envio.dados.para = para; $('envSalvarBox').hidden = true; $('envAviso').hidden = true; }
         } catch { /* segue sem salvar */ }
     }
-    try { await enviarJSON(`/api/pedidos/${envio.pid}/email/registrar`, 'POST', { meio, para }); } catch { /* registro é opcional */ }
+    if (meio !== 'direto') { // no envio direto o próprio servidor já registrou
+        try { await enviarJSON(`/api/pedidos/${envio.pid}/email/registrar`, 'POST', { meio, para }); } catch { /* registro é opcional */ }
+    }
     if (estado.empenhoId) abrirDetalhe(estado.empenhoId, { pushUrl: false, rolar: false });
+}
+
+/** Envia pelo servidor (SMTP), com o PDF anexado. */
+async function enviarDireto() {
+    if (!envioValido()) return;
+    const { para, assunto, corpo } = envioCampos();
+    if (!confirm(`Enviar o pedido agora para ${para.replace(/,/g, ', ')}?\n\nO e-mail sai pelo sistema, com o PDF anexado.`)) return;
+    const b = $('envDireto');
+    b.disabled = true;
+    b.classList.add('enviando');
+    try {
+        const r = await enviarJSON(`/api/pedidos/${envio.pid}/email/enviar`, 'POST', { para, assunto, corpo });
+        if (!r.ok) { toast(r.error, 'error'); return; }
+        toast(`Pedido enviado para ${r.para.join(', ')}`, 'success');
+        await aposAbrirEmail('direto');
+        fecharModal('modalEnviar');
+    } catch (err) { toast(err.message, 'error'); }
+    finally { b.disabled = false; b.classList.remove('enviando'); }
 }
 
 function baixarArquivo(url) {
@@ -1366,6 +1438,7 @@ async function copiarTextoEmail() {
 
 document.addEventListener('DOMContentLoaded', () => {
     $('mCredor').addEventListener('input', infoCredor);
+    $('envDireto').addEventListener('click', enviarDireto);
     $('envGmail').addEventListener('click', abrirGmail);
     $('envEml').addEventListener('click', baixarEml);
     $('envMailto').addEventListener('click', abrirMailto);

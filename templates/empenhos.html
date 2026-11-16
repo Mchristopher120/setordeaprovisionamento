@@ -33,6 +33,8 @@
                         <button type="button" class="seg-btn" data-visao="cards" aria-pressed="true">{{ ico('layout-grid') }} Fornecedores</button>
                         <button type="button" class="seg-btn" data-visao="lista" aria-pressed="false">{{ ico('list') }} Lista</button>
                     </div>
+                    <button type="button" class="btn btn-secondary" onclick="abrirRelatorios()" title="PDF da situação dos empenhos e relatórios semanal e mensal">{{ ico('file-type-pdf') }} PDF</button>
+                    <a href="/importar" class="btn btn-secondary" title="Cadastrar pela Nota de Empenho em PDF">{{ ico('file-upload') }} Ler NE em PDF</a>
                     <button id="btnNew" class="btn btn-primary">{{ ico('plus') }} Novo Empenho</button>
                 </div>
             </div>
@@ -279,6 +281,7 @@
                 </div>
                 <label for="mPedObs">Observações</label>
                 <input type="text" id="mPedObs" placeholder="ex: entregar no rancho, das 8h às 11h">
+                <div class="ped-sugestao" id="mPedSugestao" hidden></div>
                 <label>Itens solicitados <span class="muted">(até o saldo a pedir de cada item)</span></label>
                 <div id="mPedItens"></div>
             </div>
@@ -344,6 +347,10 @@
                 <label for="envCorpo">Mensagem <span class="muted small">(pode editar antes de abrir o e-mail)</span></label>
                 <textarea id="envCorpo" rows="13" class="envio-corpo"></textarea>
                 <div class="envio-opcoes">
+                    <button type="button" class="envio-op destaque" id="envDireto" hidden>
+                        <span class="envio-op-ico">{{ ico('send') }}</span>
+                        <span><strong>Enviar agora pelo sistema</strong><span class="muted small" id="envDiretoSub">Sai com o PDF do pedido anexado.</span></span>
+                    </button>
                     <button type="button" class="envio-op destaque" id="envGmail">
                         <span class="envio-op-ico">{{ ico('mail') }}</span>
                         <span><strong>Abrir no Gmail</strong><span class="muted small">Abre o e-mail pronto e baixa o PDF. Arraste o PDF baixado para a mensagem e clique em Enviar.</span></span>
@@ -357,6 +364,10 @@
                         <span><strong>Outro programa de e-mail</strong><span class="muted small">Abre o e-mail padrão do computador e baixa o PDF para anexar.</span></span>
                     </button>
                 </div>
+                <details class="envio-dica" id="envDiretoDica">
+                    <summary>{{ ico('bulb') }} Quer que o sistema envie sozinho, com o PDF anexado?</summary>
+                    <p class="muted small">Cadastre no servidor (Vercel → Settings → Environment Variables) as variáveis <code>SMTP_USER</code> (o e-mail do setor) e <code>SMTP_PASSWORD</code> (uma “senha de app” do Google) e faça um novo deploy. Depois disso aparece aqui o botão <strong>Enviar agora pelo sistema</strong>.</p>
+                </details>
                 <p class="muted small" id="envEnviado"></p>
             </div>
             <div class="modal-actions">

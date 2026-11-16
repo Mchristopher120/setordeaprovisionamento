@@ -9,6 +9,7 @@ import sys
 import time
 from datetime import date, datetime, timedelta
 from functools import wraps
+from urllib.parse import quote
 
 from resumo_itens import resumo_de_itens
 
@@ -2109,6 +2110,10 @@ def api_fornecedores():
         d["empenhado"] += e["valor_empenhado"]
         d["a_liquidar"] += e["a_liquidar"]
         d["pedidos_em_aberto"] += abertos.get(e["id"], 0)
+    notas = notas_fornecedores(db)
+    vazio = {"avaliados": 0, "no_prazo": 0, "entregas": 0, "atrasados_abertos": 0, "prazo_medio": None, "pontualidade": None, "nota": None}
+    for k, d in por_nome.items():
+        d.update(notas.get(k, vazio))
     return jsonify(sorted(por_nome.values(), key=lambda d: d["nome"]))
 
 
@@ -2242,7 +2247,8 @@ def api_email_pedido(pid):
     d = montar_email_pedido(get_db(), pid)
     if d is None:
         return erro("Pedido não encontrado", 404)
-    return jsonify({"ok": True, **d})
+    cfg = smtp_config()
+    return jsonify({"ok": True, **d, "envio_direto": bool(cfg), "remetente": cfg["user"] if cfg else None})
 
 
 @app.route("/api/pedidos/<int:pid>/email/registrar", methods=["POST"])
@@ -2373,6 +2379,573 @@ def api_importar():
         db.rollback()
         raise
     return jsonify({"ok": True, "gravado": True, "erros": [], "avisos": avisos, "empenhos": resumo})
+
+
+# ============================================================================
+# NOTA DE EMPENHO EM PDF — lê o PDF do SIAFI por regras fixas (nota_empenho.py),
+# mostra a prévia e só grava quando confirmado.
+# ============================================================================
+def chave_ne(ne):
+    """'2026NE205' e '2026NE000205' são a mesma nota: compara (ano, número)."""
+    m = re.match(r"^\s*(\d{4})\s*NE\s*0*(\d+)\s*$", str(ne or ""), re.I)
+    return (m.group(1), int(m.group(2))) if m else ("", normalizar_ne_db(ne))
+
+
+def fornecedor_por_cnpj(db, cnpj):
+    alvo = _so_digitos(cnpj)
+    if not alvo:
+        return None
+    for f in db.execute("SELECT * FROM fornecedores ORDER BY id").fetchall():
+        if _so_digitos(f["cnpj"]) == alvo:
+            return dict(f)
+    return None
+
+
+@app.route("/api/importar/ne_pdf", methods=["POST"])
+def api_ler_ne_pdf():
+    """multipart: arquivos=PDF(s) da Nota de Empenho. Só lê e devolve a prévia (nada é gravado)."""
+    from nota_empenho import ler_nota_empenho, texto_do_pdf
+
+    arquivos = request.files.getlist("arquivos")
+    if not arquivos:
+        return erro("Escolha o PDF da Nota de Empenho")
+    if len(arquivos) > 20:
+        return erro("Envie no máximo 20 PDFs por vez")
+    db = get_db()
+    existentes = {chave_ne(r["ne"]): r["ne"] for r in db.execute("SELECT ne FROM empenhos").fetchall()}
+    nomes_usados = {}
+    for r in db.execute("SELECT nome_credor FROM empenhos").fetchall():
+        nomes_usados[chave_nome(r["nome_credor"])] = r["nome_credor"]
+    notas, vistos = [], set()
+    for arq in arquivos:
+        reg = {"arquivo": arq.filename, "ok": False, "erros": [], "avisos": []}
+        notas.append(reg)
+        conteudo = arq.read()
+        if len(conteudo) > 4 * 1024 * 1024:
+            reg["erros"].append("Arquivo grande demais (máximo 4 MB).")
+            continue
+        try:
+            texto = texto_do_pdf(conteudo)
+        except Exception:
+            reg["erros"].append("Não consegui abrir o arquivo. Envie o PDF da Nota de Empenho gerado pelo SIAFI.")
+            continue
+        if len(texto.strip()) < 40:
+            reg["erros"].append("O PDF não tem texto (parece uma imagem escaneada). Use o PDF gerado pelo SIAFI.")
+            continue
+        dados, avisos = ler_nota_empenho(texto)
+        reg["avisos"] = avisos
+        if not dados:
+            reg["erros"] = avisos
+            reg["avisos"] = []
+            continue
+        reg.update(dados)
+        k = chave_ne(dados["ne"])
+        if k in existentes:
+            reg["erros"].append(f"O empenho {existentes[k]} já está cadastrado no sistema.")
+        if k in vistos:
+            reg["erros"].append("Esta NE apareceu em mais de um arquivo enviado.")
+        vistos.add(k)
+        if not dados["itens"]:
+            reg["erros"].append("Não encontrei itens nesta NE.")
+        # Nome do fornecedor: o do cadastro com o mesmo CNPJ; senão um nome igual já usado; senão o da NE
+        cad = fornecedor_por_cnpj(db, dados["cnpj"])
+        reg["fornecedor_pdf"] = dados["fornecedor"]
+        if cad:
+            reg["fornecedor"], reg["fornecedor_origem"] = cad["nome"], "cadastro"
+        elif chave_nome(dados["fornecedor"]) in nomes_usados:
+            reg["fornecedor"], reg["fornecedor_origem"] = nomes_usados[chave_nome(dados["fornecedor"])], "empenhos"
+        else:
+            reg["fornecedor_origem"] = "pdf"
+        for it in reg["itens"]:
+            n = resumo_de_itens([it["descricao"]])
+            it["nome_curto"] = (n[0][:1].upper() + n[0][1:]) if n else ""
+        reg["ok"] = not reg["erros"]
+    return jsonify({"ok": True, "notas": notas})
+
+
+@app.route("/api/importar/ne_pdf/gravar", methods=["POST"])
+def api_gravar_ne_pdf():
+    """{notas: [{ne, processo, fornecedor, cnpj, itens:[{numero_item, descricao, und, qtde, valor_unitario}]}]}
+    Grava as notas conferidas na prévia. Tudo ou nada."""
+    data = request.json or {}
+    notas = data.get("notas") or []
+    if not notas:
+        return erro("Nenhuma nota para gravar")
+    db = get_db()
+    existentes = {chave_ne(r["ne"]) for r in db.execute("SELECT ne FROM empenhos").fetchall()}
+    limpas = []
+    for n in notas:
+        ne = normalizar_ne_db(n.get("ne"))
+        forn = chave_nome(n.get("fornecedor"))
+        if not ne or not forn:
+            return erro(f"NE {ne or '(sem número)'}: informe o número e o fornecedor")
+        if chave_ne(ne) in existentes:
+            return erro(f"O empenho {ne} já está cadastrado")
+        existentes.add(chave_ne(ne))
+        itens = []
+        for it in n.get("itens") or []:
+            desc = re.sub(r"\s+", " ", str(it.get("descricao") or "")).strip()
+            q, vu = _num_ou_none(it.get("qtde")), _num_ou_none(it.get("valor_unitario"))
+            if not desc or q is None or q <= 0 or vu is None or vu < 0:
+                return erro(f"NE {ne}: item {it.get('numero_item') or '?'} com descrição, quantidade ou valor inválido")
+            itens.append((str(it.get("numero_item") or "").strip(), desc, str(it.get("und") or "").strip().upper(), q, vu))
+        if not itens:
+            return erro(f"NE {ne}: sem itens")
+        limpas.append((ne, str(n.get("processo") or "").strip(), forn, str(n.get("cnpj") or "").strip(), itens))
+    criados, forn_novos = [], []
+    try:
+        for ne, processo, forn, cnpj, itens in limpas:
+            eid = db.execute("INSERT INTO empenhos (ne, processo, nome_credor, criado_em) VALUES (?,?,?,?)",
+                             (ne, processo, forn, agora())).lastrowid
+            for num, desc, und, q, vu in itens:
+                _inserir_item(db, eid, num, desc, und, q, vu)
+            total = sum(q * vu for _, _, _, q, vu in itens)
+            registrar(db, "IMPORTAR", "empenho", eid, eid,
+                      f"Empenho {ne} ({forn}) lido do PDF da Nota de Empenho: {len(itens)} item(ns) — empenhado {fmt_brl(total)}")
+            criados.append({"id": eid, "ne": ne})
+            # Cadastra o fornecedor (com o CNPJ da NE) quando ainda não existe
+            if cnpj and not fornecedor_por_nome(db, forn) and not fornecedor_por_cnpj(db, cnpj):
+                fid = db.execute(
+                    "INSERT INTO fornecedores (nome, cnpj, email, telefone, contato, observacoes, criado_em) VALUES (?,?,?,?,?,?,?)",
+                    (forn, cnpj, "", "", "", "", agora())).lastrowid
+                registrar(db, "CRIAR", "fornecedor", fid, None, f"Fornecedor {forn} cadastrado com o CNPJ da Nota de Empenho")
+                forn_novos.append(forn)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return jsonify({"ok": True, "criados": criados, "fornecedores_novos": forn_novos})
+
+
+def _num_ou_none(v):
+    if v is None or str(v).strip() == "":
+        return None
+    return parse_money(v) if isinstance(v, str) else float(v)
+
+
+# ============================================================================
+# ENVIO DIRETO DO PEDIDO POR E-MAIL (SMTP) — o sistema envia com o PDF anexado.
+# Configuração (variáveis de ambiente): SMTP_USER e SMTP_PASSWORD (no Gmail,
+# uma "senha de app"). Opcionais: SMTP_HOST, SMTP_PORT, SMTP_SEGURANCA
+# (ssl | starttls | nenhuma) e SMTP_NOME (nome que aparece como remetente).
+# ============================================================================
+def smtp_config():
+    user = (os.environ.get("SMTP_USER") or "").strip()
+    senha = os.environ.get("SMTP_PASSWORD") or ""
+    if not user or not senha:
+        return None
+    seg = (os.environ.get("SMTP_SEGURANCA") or "ssl").strip().lower()
+    return {
+        "user": user, "senha": senha.replace(" ", "") if "gmail" in (os.environ.get("SMTP_HOST") or "smtp.gmail.com") else senha,
+        "host": (os.environ.get("SMTP_HOST") or "smtp.gmail.com").strip(),
+        "port": int(os.environ.get("SMTP_PORT") or (465 if seg == "ssl" else 587)),
+        "seguranca": seg,
+        "nome": (os.environ.get("SMTP_NOME") or f"{UNIDADE_PDF['setor']} - {UNIDADE_PDF['nome']}").strip(),
+    }
+
+
+@app.route("/api/pedidos/<int:pid>/email/enviar", methods=["POST"])
+def api_enviar_email(pid):
+    """Envia o e-mail do pedido pelo servidor, com o PDF anexado."""
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    from email.utils import formataddr, formatdate, make_msgid
+
+    cfg = smtp_config()
+    if not cfg:
+        return erro("Envio direto não configurado. Defina SMTP_USER e SMTP_PASSWORD no servidor.", 503)
+    db = get_db()
+    base = montar_email_pedido(db, pid)
+    if base is None:
+        return erro("Pedido não encontrado", 404)
+    data = request.json or {}
+    paras = [e for e in re.split(r"[;,\s]+", str(data.get("para") or base["para"] or "")) if e]
+    if not paras:
+        return erro("Informe o e-mail do fornecedor")
+    for e in paras:
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
+            return erro(f"E-mail inválido: {e}")
+    assunto = re.sub(r"[\r\n]+", " ", str(data.get("assunto") or base["assunto"])).strip()
+    corpo = str(data.get("corpo") or base["corpo"])
+    msg = EmailMessage()
+    msg["From"] = formataddr((cfg["nome"], cfg["user"]))
+    msg["To"] = ", ".join(paras)
+    msg["Reply-To"] = cfg["user"]
+    msg["Subject"] = assunto
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=cfg["user"].split("@")[-1])
+    msg.set_content(corpo)
+    buf, nome_pdf = gerar_pdf_pedido(pid)
+    msg.add_attachment(buf.getvalue(), maintype="application", subtype="pdf", filename=nome_pdf)
+    try:
+        if cfg["seguranca"] == "ssl":
+            srv = smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=20, context=ssl.create_default_context())
+        else:
+            srv = smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
+            if cfg["seguranca"] == "starttls":
+                srv.starttls(context=ssl.create_default_context())
+        with srv:
+            if cfg["seguranca"] != "nenhuma":
+                srv.login(cfg["user"], cfg["senha"])
+            recusados = srv.send_message(msg)
+    except smtplib.SMTPAuthenticationError:
+        return erro("O servidor de e-mail recusou o usuário ou a senha. No Gmail, use uma senha de app (não a senha normal).", 502)
+    except smtplib.SMTPRecipientsRefused:
+        return erro("O servidor de e-mail recusou o endereço do destinatário. Confira o e-mail.", 502)
+    except (smtplib.SMTPException, OSError) as e:
+        return erro(f"Não foi possível enviar agora ({type(e).__name__}). O pedido não foi marcado como enviado; tente de novo.", 502)
+    if recusados:
+        return erro("Alguns destinatários foram recusados: " + ", ".join(recusados.keys()), 502)
+    pedido = db.execute("SELECT p.*, e.ne FROM pedidos p JOIN empenhos e ON e.id = p.empenho_id WHERE p.id = ?", (pid,)).fetchone()
+    db.execute("UPDATE pedidos SET enviado_em = ?, enviado_por = ? WHERE id = ?", (agora(), usuario_atual(), pid))
+    registrar(db, "ENVIAR", "pedido", pid, pedido["empenho_id"],
+              f"Pedido {pedido['numero_pedido']} ({pedido['ne']}) enviado por e-mail pelo sistema para {', '.join(paras)}, com o PDF anexado")
+    db.commit()
+    return jsonify({"ok": True, "para": paras, "remetente": cfg["user"]})
+
+
+# ============================================================================
+# SUGESTÃO DE PEDIDO — repete o último pedido ou usa a média dos últimos,
+# sempre limitado ao saldo a pedir de cada item.
+# ============================================================================
+@app.route("/api/empenhos/<int:eid>/sugestao_pedido")
+def api_sugestao_pedido(eid):
+    db = get_db()
+    peds = db.execute("SELECT id, numero_pedido, data_pedido, prazo_dias FROM pedidos WHERE empenho_id = ?"
+                      " ORDER BY data_pedido DESC, id DESC", (eid,)).fetchall()
+    if not peds:
+        return jsonify({"ok": True, "opcoes": []})
+    itens_ped = {}
+    for r in db.execute("SELECT pi.pedido_id, pi.item_id, pi.qtde_pedida FROM pedido_itens pi JOIN pedidos p ON p.id = pi.pedido_id"
+                        " WHERE p.empenho_id = ?", (eid,)).fetchall():
+        itens_ped.setdefault(r["pedido_id"], {})[r["item_id"]] = float(r["qtde_pedida"] or 0)
+    peds = [p for p in peds if itens_ped.get(p["id"])]
+    opcoes = []
+    if peds:
+        u = peds[0]
+        opcoes.append({"tipo": "ultimo", "rotulo": f"Repetir o último pedido ({u['numero_pedido']}, de {data_br(u['data_pedido'])})",
+                       "itens": itens_ped[u["id"]], "prazo_dias": u["prazo_dias"]})
+    if len(peds) >= 2:
+        ult = peds[:3]
+        soma, vezes = {}, {}
+        for p in ult:
+            for iid, q in itens_ped[p["id"]].items():
+                soma[iid] = soma.get(iid, 0.0) + q
+                vezes[iid] = vezes.get(iid, 0) + 1
+        media = {iid: round(soma[iid] / vezes[iid], 2) for iid in soma if vezes[iid] * 2 >= len(ult)}
+        prazos = [p["prazo_dias"] for p in ult if p["prazo_dias"]]
+        if media:
+            opcoes.append({"tipo": "media", "rotulo": f"Média dos últimos {len(ult)} pedidos", "itens": media,
+                           "prazo_dias": max(set(prazos), key=prazos.count) if prazos else None})
+    return jsonify({"ok": True, "opcoes": opcoes})
+
+
+# ============================================================================
+# NOTA DO FORNECEDOR — pontualidade e prazo real, calculados dos pedidos e NFs.
+# ============================================================================
+def notas_fornecedores(db):
+    """{chave do nome: {avaliados, no_prazo, pontualidade, nota, prazo_medio, entregas, atrasados_abertos}}
+
+    * Pedido avaliado = tem prazo e já foi entregue por completo, ou está aberto e vencido.
+    * No prazo = a última NF chegou até a data de entrega.
+    * Prazo médio = dias entre o pedido e a última NF dos pedidos entregues (ignora 0 dia:
+      normalmente é pedido antigo lançado com a data da própria NF).
+    """
+    resumo = resumo_pedidos(db)
+    ultima = {}
+    for r in db.execute("SELECT pedido_id, MAX(data_recebimento) as d FROM recebimentos GROUP BY pedido_id").fetchall():
+        ultima[r["pedido_id"]] = parse_data(r["d"])
+    out = {}
+    for p in db.execute("SELECT p.id, p.data_pedido, e.nome_credor FROM pedidos p JOIN empenhos e ON e.id = p.empenho_id").fetchall():
+        rs = resumo.get(p["id"])
+        if not rs:
+            continue
+        f = out.setdefault(chave_nome(p["nome_credor"]), {"avaliados": 0, "no_prazo": 0, "_dias": [], "entregas": 0, "atrasados_abertos": 0})
+        dp, du = parse_data(p["data_pedido"]), ultima.get(p["id"])
+        venc = parse_data(rs["vencimento"])
+        if rs["status"] == "RECEBIDO" and du:
+            f["entregas"] += 1
+            if dp and (du - dp).days > 0:
+                f["_dias"].append((du - dp).days)
+            if venc:
+                f["avaliados"] += 1
+                if du <= venc:
+                    f["no_prazo"] += 1
+        elif rs["atrasado"]:
+            f["avaliados"] += 1
+            f["atrasados_abertos"] += 1
+    for f in out.values():
+        dias = f.pop("_dias")
+        f["prazo_medio"] = round(sum(dias) / len(dias), 1) if dias else None
+        f["pontualidade"] = round(f["no_prazo"] / f["avaliados"] * 100, 1) if f["avaliados"] else None
+        f["nota"] = round(f["pontualidade"] / 10, 1) if f["pontualidade"] is not None else None
+    return out
+
+
+# ============================================================================
+# RELATÓRIOS EM PDF — situação dos empenhos, semanal e mensal (relatorios.py)
+# ============================================================================
+MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
+         "novembro", "dezembro"]
+
+
+@app.route("/api/relatorios/situacao.pdf")
+def api_relatorio_situacao():
+    """?ano=2026 &fornecedor=NOME &saldo=1 (só com saldo a liquidar)"""
+    from relatorios import pdf_situacao
+    db = get_db()
+    ano = (request.args.get("ano") or "").strip()
+    forn = chave_nome(request.args.get("fornecedor"))
+    so_saldo = request.args.get("saldo") == "1"
+    lista = financeiro_empenhos(db)
+    if ano:
+        lista = [e for e in lista if e["ano"] == ano]
+    if forn:
+        lista = [e for e in lista if chave_nome(e["nome_credor"]) == forn]
+    if so_saldo:
+        lista = [e for e in lista if e["a_liquidar"] > 0.005]
+    lista.sort(key=lambda e: (-e["a_liquidar"], e["ne"]))
+    filtros = [f"Exercício {ano}" if ano else "", forn.title() if forn else "", "Só com saldo a liquidar" if so_saldo else ""]
+    buf = pdf_situacao(lista, "  •  ".join(f for f in filtros if f))
+    registrar(db, "EXPORTAR", "relatorio", None, None, f"PDF da situação dos empenhos ({len(lista)} empenho(s))")
+    db.commit()
+    return send_file(buf, mimetype="application/pdf", as_attachment=True,
+                     download_name=f"Situacao_Empenhos_{date.today().strftime('%Y-%m-%d')}.pdf")
+
+
+def _periodo(tipo, ref):
+    """(início, fim, título, texto do período, nome do arquivo). Semana = segunda a domingo."""
+    ref = parse_data(ref) or date.today()
+    if tipo == "mes":
+        ini = ref.replace(day=1)
+        fim = (ini.replace(year=ini.year + 1, month=1) if ini.month == 12 else ini.replace(month=ini.month + 1)) - timedelta(days=1)
+        return ini, fim, "RELATÓRIO MENSAL", f"{MESES[ini.month - 1].capitalize()} de {ini.year}", f"Relatorio_Mensal_{ini.strftime('%Y-%m')}.pdf"
+    ini = ref - timedelta(days=ref.weekday())
+    fim = ini + timedelta(days=6)
+    return (ini, fim, "RELATÓRIO SEMANAL", f"Semana de {ini.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')}",
+            f"Relatorio_Semanal_{ini.strftime('%Y-%m-%d')}.pdf")
+
+
+@app.route("/api/relatorios/periodo.pdf")
+def api_relatorio_periodo():
+    """?tipo=semana|mes &ref=AAAA-MM-DD (qualquer dia dentro da semana/mês; padrão: hoje)"""
+    from relatorios import pdf_periodo
+    db = get_db()
+    tipo = "mes" if request.args.get("tipo") == "mes" else "semana"
+    ini, fim, titulo, periodo_txt, arquivo = _periodo(tipo, request.args.get("ref"))
+    a, b = ini.isoformat(), fim.isoformat()
+    dentro = lambda s: bool(s) and a <= str(s)[:10] <= b  # noqa: E731
+
+    emp = {e["id"]: e for e in financeiro_empenhos(db)}
+    peds = {p["id"]: dict(p) for p in db.execute("SELECT * FROM pedidos").fetchall()}
+    resumo = resumo_pedidos(db)
+    recs = db.execute(
+        "SELECT r.id, r.pedido_id, r.empenho_id, r.nf, r.data_recebimento, r.observacoes, r.item_id, r.qtde_recebida,"
+        " r.pago_em, r.pago_por, i.numero_item, i.descricao, i.und, i.valor_unitario"
+        " FROM recebimentos r LEFT JOIN itens i ON i.id = r.item_id ORDER BY r.data_recebimento, r.id").fetchall()
+    nfs = _grupos_nf(recs, por_pedido=True)
+
+    def linha_nf(n, data):
+        p = peds.get(n["pedido_id"], {})
+        e = emp.get(p.get("empenho_id"), {})
+        return {"data": data_br(data), "_ord": str(data), "nf": n["nf"], "fornecedor": e.get("nome_credor", "—"), "ne": e.get("ne", "—"),
+                "pedido": p.get("numero_pedido", "—"), "valor": n["valor"], "por": n.get("pago_por") or "—",
+                "_forn": chave_nome(e.get("nome_credor"))}
+
+    recebidas = sorted([linha_nf(n, n["data_recebimento"]) for n in nfs if dentro(n["data_recebimento"])], key=lambda x: x["_ord"])
+    pagas = sorted([linha_nf(n, n["pago_em"]) for n in nfs if dentro(n["pago_em"])], key=lambda x: x["_ord"])
+    a_pagar = sorted([linha_nf(n, n["data_recebimento"]) for n in nfs if not n["pago_em"]], key=lambda x: x["_ord"])
+
+    ST = {"INCLUIDO": "Em aberto", "PARCIAL": "Parcial", "RECEBIDO": "Recebido", "ENCERRADO": "Encerrado"}
+    valor_ped = {}
+    for r in db.execute("SELECT pi.pedido_id, pi.qtde_pedida, i.valor_unitario FROM pedido_itens pi JOIN itens i ON i.id = pi.item_id").fetchall():
+        valor_ped[r["pedido_id"]] = valor_ped.get(r["pedido_id"], 0.0) + float(r["qtde_pedida"] or 0) * float(r["valor_unitario"] or 0)
+
+    def linha_ped(p):
+        rs = resumo.get(p["id"], {})
+        e = emp.get(p["empenho_id"], {})
+        sit = f"{rs.get('dias_atraso')} dia(s) de atraso" if rs.get("atrasado") else ST.get(rs.get("status"), "—")
+        return {"data": data_br(p["data_pedido"]), "_ord": str(p["data_pedido"]), "numero": p["numero_pedido"], "fornecedor": e.get("nome_credor", "—"),
+                "ne": e.get("ne", "—"), "situacao": sit, "atrasado": bool(rs.get("atrasado")), "valor": valor_ped.get(p["id"], 0.0),
+                "vencimento": data_br(rs.get("vencimento")) if rs.get("vencimento") else "", "_atraso": rs.get("dias_atraso", 0)}
+
+    feitos = sorted([linha_ped(p) for p in peds.values() if dentro(p["data_pedido"])], key=lambda x: x["_ord"])
+    abertos = sorted([linha_ped(p) for p in peds.values() if resumo.get(p["id"], {}).get("status") in ("INCLUIDO", "PARCIAL")],
+                     key=lambda x: (-x["_atraso"], x["_ord"]))
+
+    forn = {}
+    for e in emp.values():
+        f = forn.setdefault(chave_nome(e["nome_credor"]), {"nome": e["nome_credor"], "liquidado": 0.0, "pago": 0.0, "a_liquidar": 0.0})
+        f["a_liquidar"] += e["a_liquidar"]
+    for n in recebidas:
+        if n["_forn"] in forn:
+            forn[n["_forn"]]["liquidado"] += n["valor"]
+    for n in pagas:
+        if n["_forn"] in forn:
+            forn[n["_forn"]]["pago"] += n["valor"]
+    fornecedores = sorted([f for f in forn.values() if f["liquidado"] or f["pago"] or f["a_liquidar"] > 0.005],
+                          key=lambda f: (-(f["liquidado"] + f["pago"]), -f["a_liquidar"]))
+
+    dados = {
+        "titulo": titulo, "periodo_txt": periodo_txt,
+        "resumo": {"liquidado": sum(n["valor"] for n in recebidas), "pago": sum(n["valor"] for n in pagas), "nfs": len(recebidas),
+                   "pedidos": len(feitos), "a_pagar": sum(n["valor"] for n in a_pagar), "nfs_a_pagar": len(a_pagar),
+                   "abertos": len(abertos), "atrasados": sum(1 for p in abertos if p["atrasado"])},
+        "nfs": recebidas, "pagamentos": pagas, "pedidos": feitos, "abertos": abertos, "a_pagar": a_pagar, "fornecedores": fornecedores,
+    }
+    buf = pdf_periodo(dados)
+    registrar(db, "EXPORTAR", "relatorio", None, None, f"{titulo.capitalize()} em PDF ({periodo_txt})")
+    db.commit()
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=arquivo)
+
+
+# ============================================================================
+# BACKUP — baixa tudo num arquivo .json e restaura a partir dele.
+# ============================================================================
+TABELAS_BACKUP = ["fornecedores", "empenhos", "itens", "pedidos", "pedido_itens", "recebimentos", "pagamentos",
+                  "movimentos_item", "auditoria", "lixeira"]
+
+
+def _colunas(db, tabela):
+    if USE_POSTGRES:
+        return [r["column_name"] for r in db.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position", (tabela,)).fetchall()]
+    return [r[1] for r in db.execute(f"PRAGMA table_info({tabela})").fetchall()]
+
+
+@app.route("/api/backup.json")
+def api_backup():
+    db = get_db()
+    dados = {t: _linhas(db, f"SELECT * FROM {t} ORDER BY id", ()) for t in TABELAS_BACKUP}
+    registrar(db, "EXPORTAR", "backup", None, None,
+              "Backup completo baixado (" + ", ".join(f"{len(v)} {k}" for k, v in dados.items() if v and k in ("empenhos", "itens", "pedidos")) + ")")
+    db.commit()
+    corpo = json.dumps({"sistema": "aprovisionamento", "versao": 1, "gerado_em": agora(), "gerado_por": usuario_atual(),
+                        "tabelas": dados}, ensure_ascii=False, default=str)
+    return send_file(io.BytesIO(corpo.encode("utf-8")), mimetype="application/json", as_attachment=True,
+                     download_name=f"backup_aprovisionamento_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json")
+
+
+@app.route("/api/backup/restaurar", methods=["POST"])
+def api_restaurar_backup():
+    """multipart: arquivo=backup .json, confirmar=RESTAURAR. Sem 'confirmar', só confere o arquivo.
+    Restaurar SUBSTITUI tudo o que está no sistema pelo conteúdo do arquivo (tudo ou nada)."""
+    arq = request.files.get("arquivo")
+    if not arq or not arq.filename:
+        return erro("Escolha o arquivo de backup (.json)")
+    bruto = arq.read()
+    if len(bruto) > 4 * 1024 * 1024:
+        return erro("Arquivo grande demais (máximo 4 MB)")
+    try:
+        pacote = json.loads(bruto.decode("utf-8"))
+        tabelas = pacote["tabelas"]
+        assert pacote.get("sistema") == "aprovisionamento" and isinstance(tabelas, dict)
+    except Exception:
+        return erro("Este arquivo não é um backup do sistema.")
+    db = get_db()
+    resumo = {t: len(tabelas.get(t) or []) for t in TABELAS_BACKUP}
+    atual = {t: db.execute(f"SELECT COUNT(*) as n FROM {t}").fetchone()["n"] for t in TABELAS_BACKUP}
+    if request.form.get("confirmar") != "RESTAURAR":
+        return jsonify({"ok": True, "restaurado": False, "gerado_em": pacote.get("gerado_em"), "gerado_por": pacote.get("gerado_por"),
+                        "no_arquivo": resumo, "no_sistema": atual})
+    try:
+        for t in reversed(TABELAS_BACKUP):
+            db.execute(f"DELETE FROM {t}")
+        for t in TABELAS_BACKUP:
+            cols_ok = set(_colunas(db, t))
+            for linha in tabelas.get(t) or []:
+                cols = [c for c in linha if c in cols_ok]
+                if not cols:
+                    continue
+                db.execute(f"INSERT INTO {t} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+                           tuple(linha[c] for c in cols))
+            if USE_POSTGRES:  # o próximo id continua depois do maior restaurado
+                db.execute(f"SELECT setval(pg_get_serial_sequence('{t}', 'id'), COALESCE((SELECT MAX(id) FROM {t}), 1))")
+        registrar(db, "RESTAURAR", "backup", None, None,
+                  f"Backup de {data_br(pacote.get('gerado_em')) or '?'} restaurado: {resumo['empenhos']} empenho(s), "
+                  f"{resumo['itens']} item(ns), {resumo['pedidos']} pedido(s) — substituiu o que havia no sistema")
+        db.commit()
+    except Exception:
+        db.rollback()
+        return erro("Não foi possível restaurar: o arquivo tem dados incompatíveis. Nada foi alterado.", 422)
+    return jsonify({"ok": True, "restaurado": True, "no_arquivo": resumo})
+
+
+# ============================================================================
+# BUSCA GERAL — NE, processo, fornecedor, pedido, NF e item, de qualquer tela.
+# ============================================================================
+def _sem_acento(s):
+    import unicodedata
+    return unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode().lower()
+
+
+@app.route("/api/busca")
+def api_busca():
+    q = _sem_acento(request.args.get("q")).strip()
+    if len(q) < 2:
+        return jsonify({"ok": True, "q": q, "grupos": []})
+    qd = re.sub(r"\D", "", q)
+    db = get_db()
+    emp = {e["id"]: e for e in financeiro_empenhos(db)}
+    grupos = []
+
+    def bate(*campos):
+        return any(q in _sem_acento(c) for c in campos if c)
+
+    achados = [e for e in emp.values() if bate(e["ne"], e["processo"]) or (qd and qd == re.sub(r"\D", "", e["ne"])[-len(qd):].lstrip("0"))]
+    if achados:
+        grupos.append({"titulo": "Empenhos", "icone": "receipt", "itens": [
+            {"titulo": e["ne"], "sub": f"{e['nome_credor']}" + (f" · Processo {e['processo']}" if e["processo"] else ""),
+             "extra": f"a liquidar {fmt_brl(e['a_liquidar'])}", "url": f"/empenhos?id={e['id']}"} for e in achados[:6]]})
+
+    forn = {}
+    for f in db.execute("SELECT nome, cnpj, email, telefone, contato FROM fornecedores").fetchall():
+        forn[chave_nome(f["nome"])] = dict(f)
+    for e in emp.values():
+        forn.setdefault(chave_nome(e["nome_credor"]), {"nome": e["nome_credor"], "cnpj": "", "email": "", "telefone": "", "contato": ""})
+    af = [f for f in forn.values() if bate(f["nome"], f["email"], f["contato"]) or (len(qd) >= 4 and qd in re.sub(r"\D", "", f["cnpj"] or ""))
+          or (len(qd) >= 4 and qd in re.sub(r"\D", "", f["telefone"] or ""))]
+    if af:
+        cont = {}
+        for e in emp.values():
+            cont[chave_nome(e["nome_credor"])] = cont.get(chave_nome(e["nome_credor"]), 0) + 1
+        grupos.append({"titulo": "Fornecedores", "icone": "truck", "itens": [
+            {"titulo": f["nome"], "sub": " · ".join(x for x in (f["cnpj"], f["email"], f["telefone"]) if x) or "sem contato cadastrado",
+             "extra": f"{cont.get(chave_nome(f['nome']), 0)} empenho(s)",
+             "url": f"/empenhos?fornecedor={quote(f['nome'])}" if cont.get(chave_nome(f["nome"])) else "/fornecedores"}
+            for f in sorted(af, key=lambda f: f["nome"])[:6]]})
+
+    peds = [p for p in db.execute("SELECT id, empenho_id, numero_pedido, data_pedido FROM pedidos ORDER BY id DESC").fetchall()
+            if bate(p["numero_pedido"])]
+    if peds:
+        grupos.append({"titulo": "Pedidos", "icone": "clipboard-list", "itens": [
+            {"titulo": p["numero_pedido"], "sub": f"{emp.get(p['empenho_id'], {}).get('ne', '—')} · {emp.get(p['empenho_id'], {}).get('nome_credor', '—')}",
+             "extra": data_br(p["data_pedido"]), "url": f"/empenhos?id={p['empenho_id']}"} for p in peds[:6]]})
+
+    nfs, vistas = [], set()
+    for r in db.execute("SELECT r.empenho_id, r.pedido_id, r.nf, r.data_recebimento, r.pago_em, p.numero_pedido FROM recebimentos r"
+                        " LEFT JOIN pedidos p ON p.id = r.pedido_id ORDER BY r.id DESC").fetchall():
+        k = (r["pedido_id"], r["nf"])
+        if k in vistas or not bate(r["nf"]):
+            continue
+        vistas.add(k)
+        nfs.append(r)
+    if nfs:
+        grupos.append({"titulo": "Notas fiscais", "icone": "file-invoice", "itens": [
+            {"titulo": f"NF {r['nf']}", "sub": f"{r['numero_pedido'] or '—'} · {emp.get(r['empenho_id'], {}).get('ne', '—')} · {emp.get(r['empenho_id'], {}).get('nome_credor', '—')}",
+             "extra": ("paga" if r["pago_em"] else "a pagar") + f" · {data_br(r['data_recebimento'])}", "url": f"/empenhos?id={r['empenho_id']}"}
+            for r in nfs[:6]]})
+
+    itens = [i for i in db.execute("SELECT id, empenho_id, numero_item, descricao, und FROM itens ORDER BY id DESC").fetchall() if bate(i["descricao"])]
+    if itens:
+        def nome(i):
+            n = resumo_de_itens([i["descricao"]])
+            return (n[0][:1].upper() + n[0][1:]) if n else (i["descricao"] or "")[:40]
+        grupos.append({"titulo": "Itens", "icone": "file-text", "itens": [
+            {"titulo": nome(i), "sub": f"{emp.get(i['empenho_id'], {}).get('ne', '—')} · {emp.get(i['empenho_id'], {}).get('nome_credor', '—')}",
+             "extra": f"item {i['numero_item']}" if i["numero_item"] else "", "url": f"/empenhos?id={i['empenho_id']}"} for i in itens[:6]]})
+    return jsonify({"ok": True, "q": q, "grupos": grupos})
 
 
 def normalizar_ne_db(ne):

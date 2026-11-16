@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Importar planilha - Aprovisionamento</title>
+    <title>Importar - Aprovisionamento</title>
     <link rel="icon" href="{{ url_for('static', filename='img/favicon.ico') }}" sizes="any">
     <link rel="icon" href="{{ url_for('static', filename='img/favicon-64.png') }}" type="image/png">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/apple-touch-icon.png') }}">
@@ -18,12 +18,41 @@
     <main class="container">
         <div class="page-head">
             <div>
-                <h2 class="page-title">Importar planilha</h2>
-                <p class="page-sub">Cadastre vários empenhos de uma vez: itens, pedidos e NFs</p>
+                <h2 class="page-title">Importar</h2>
+                <p class="page-sub">Cadastre empenhos sem digitar: pela Nota de Empenho em PDF ou por planilha</p>
             </div>
-            <a href="/api/importar/modelo.xlsx" class="btn btn-secondary btn-sm">{{ ico('download') }} Baixar modelo</a>
         </div>
 
+        <div class="tabs" role="tablist">
+            <button class="tab active" role="tab" aria-selected="true" data-tab="pdf">{{ ico('file-type-pdf') }} Nota de Empenho (PDF)</button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="xlsx">{{ ico('file-spreadsheet') }} Planilha (.xlsx)</button>
+        </div>
+
+        <!-- NOTA DE EMPENHO EM PDF -->
+        <div id="tab-pdf">
+            <section class="card">
+                <form id="formNe" class="import-form">
+                    <label class="dropzone" id="dropNe" for="arquivosNe">
+                        <span class="dropzone-ico">{{ ico('file-type-pdf') }}</span>
+                        <span class="dropzone-txt">
+                            <strong id="nomeNe">Escolha os PDFs das Notas de Empenho</strong>
+                            <span class="muted small">ou arraste os arquivos para cá · pode enviar vários de uma vez</span>
+                        </span>
+                        <input type="file" id="arquivosNe" accept=".pdf,application/pdf" multiple>
+                    </label>
+                    <button type="submit" class="btn btn-primary" id="btnLerNe" disabled>{{ ico('search') }} Ler notas</button>
+                </form>
+                <ol class="import-passos muted small">
+                    <li>No SIAFI / Tesouro Gerencial, salve a Nota de Empenho em PDF (impressão completa).</li>
+                    <li>Clique em <strong>Ler notas</strong>: o sistema tira do PDF o número da NE, o processo, o fornecedor e os itens. Nada é gravado ainda.</li>
+                    <li>Confira a prévia, complete a <strong>unidade</strong> dos itens (a NE não traz) e clique em <strong>Cadastrar</strong>.</li>
+                </ol>
+            </section>
+            <section id="resultadoNe" hidden></section>
+        </div>
+
+        <!-- PLANILHA -->
+        <div id="tab-xlsx" hidden>
         <section class="card">
             <form id="formImport" class="import-form">
                 <label class="dropzone" id="dropzone" for="arquivo">
@@ -35,6 +64,7 @@
                     <input type="file" id="arquivo" name="arquivo" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
                 </label>
                 <button type="submit" class="btn btn-primary" id="btnVerificar" disabled>{{ ico('search') }} Verificar</button>
+                <a href="/api/importar/modelo.xlsx" class="btn btn-secondary">{{ ico('download') }} Baixar modelo</a>
             </form>
             <ol class="import-passos muted small">
                 <li>Baixe o modelo (abas Empenhos, Itens, Pedidos e NFs) ou use uma planilha preparada.</li>
@@ -44,6 +74,7 @@
         </section>
 
         <section id="resultado" hidden></section>
+        </div>
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
