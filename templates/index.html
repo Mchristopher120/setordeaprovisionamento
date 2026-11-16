@@ -29,7 +29,10 @@
                 <h2 class="page-title">Visão geral</h2>
                 <p class="page-sub" id="dashSub">Empenhos, pedidos e pagamentos do setor</p>
             </div>
-            <button id="btnRefresh" class="btn btn-secondary btn-sm" title="Atualizar dados">{{ ico('refresh') }} Atualizar</button>
+            <div class="page-head-acoes">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="abrirRelatorios()" title="Situação dos empenhos, relatório semanal e mensal">{{ ico('file-type-pdf') }} Relatórios</button>
+                <button id="btnRefresh" class="btn btn-secondary btn-sm" title="Atualizar dados">{{ ico('refresh') }} Atualizar</button>
+            </div>
         </div>
 
         <section class="faixa-atencao" id="atencao" aria-label="Precisa de atenção"></section>

@@ -19,6 +19,10 @@
         <a href="/historico" class="nav-link {{ 'active' if pagina == 'historico' }}" {% if pagina == 'historico' %}aria-current="page"{% endif %}>{{ ico('history') }}Histórico</a>
     </nav>
 
+    <button type="button" class="busca-btn" id="buscaBtn" aria-haspopup="dialog" title="Buscar em todo o sistema (Ctrl+K)">
+        {{ ico('search') }}<span class="busca-btn-txt">Buscar…</span><kbd>Ctrl K</kbd>
+    </button>
+
     <div class="user-menu">
         <button type="button" class="avatar-btn" id="userBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="userMenu"
                 title="{{ ('Conectado como ' ~ usuario) if usuario else 'Menu' }}">
@@ -29,8 +33,11 @@
                 {% if usuario %}<strong>{{ usuario }}</strong><span>Setor de Aprovisionamento</span>
                 {% else %}<strong>Modo local</strong><span>Sem senha configurada</span>{% endif %}
             </div>
+            <button type="button" class="dropdown-item" role="menuitem" data-abrir-global="modalRelatorios">{{ ico('file-type-pdf') }}Relatórios em PDF</button>
+            <a href="/importar" class="dropdown-item" role="menuitem">{{ ico('file-upload') }}Importar NE (PDF) ou planilha</a>
             <a href="/api/exportar.xlsx" class="dropdown-item" role="menuitem">{{ ico('file-spreadsheet') }}Exportar Excel</a>
-            <a href="/importar" class="dropdown-item" role="menuitem">{{ ico('file-upload') }}Importar planilha</a>
+            <button type="button" class="dropdown-item" role="menuitem" data-abrir-global="modalBackup">{{ ico('database') }}Backup</button>
+            <div class="dropdown-sep" role="separator"></div>
             <button type="button" id="btnTema" class="dropdown-item btn-tema" role="menuitem">
                 {{ ico('device-desktop', 'ico tema-auto') }}{{ ico('moon', 'ico tema-dark') }}{{ ico('sun', 'ico tema-light') }}Tema: <span class="tema-rotulo">Automático</span>
             </button>
@@ -44,6 +51,86 @@
 {% if not auth_ativa %}
 <div class="banner-aviso">{{ ico('alert-triangle') }} Modo local sem senha. Para exigir login, defina a variável <code>APP_PASSWORD</code>.</div>
 {% endif %}
+
+<!-- BUSCA GERAL (Ctrl+K): NE, fornecedor, pedido, NF e item -->
+<div class="modal modal-busca" id="modalBusca">
+    <div role="dialog" aria-modal="true" aria-label="Buscar em todo o sistema" class="busca-box">
+        <div class="busca-campo">
+            {{ ico('search') }}
+            <input type="search" id="buscaInput" placeholder="Buscar NE, fornecedor, pedido, NF ou item…" autocomplete="off" spellcheck="false"
+                   role="combobox" aria-expanded="false" aria-controls="buscaResultados" aria-autocomplete="list">
+            <kbd>Esc</kbd>
+        </div>
+        <div class="busca-resultados" id="buscaResultados" role="listbox"></div>
+    </div>
+</div>
+
+<!-- RELATÓRIOS EM PDF -->
+<div class="modal" id="modalRelatorios">
+    <div role="dialog" aria-modal="true" aria-labelledby="relTitulo" class="modal-box modal-large">
+        <h3 id="relTitulo">Relatórios em PDF</h3>
+        <div class="modal-body rel-lista">
+            <div class="rel-op">
+                <span class="envio-op-ico">{{ ico('receipt') }}</span>
+                <div class="rel-txt"><strong>Situação dos empenhos</strong>
+                    <span class="muted small">Cada empenho com fornecedor, itens, liquidado, pago e a liquidar, com a barra de execução.</span>
+                    <div class="rel-filtros">
+                        <select id="relAno" aria-label="Exercício"><option value="">Todos os anos</option></select>
+                        <select id="relForn" aria-label="Fornecedor"><option value="">Todos os fornecedores</option></select>
+                        <label class="check"><input type="checkbox" id="relSaldo"> Só com saldo a liquidar</label>
+                    </div>
+                </div>
+                <button type="button" class="btn btn-primary btn-sm" id="relBaixarSit">{{ ico('download') }} Baixar</button>
+            </div>
+            <div class="rel-op">
+                <span class="envio-op-ico">{{ ico('calendar-due') }}</span>
+                <div class="rel-txt"><strong>Relatório semanal</strong>
+                    <span class="muted small">NFs recebidas, pagamentos e pedidos da semana (segunda a domingo), mais as pendências de hoje.</span>
+                    <div class="rel-filtros"><select id="relSemana" aria-label="Semana"></select></div>
+                </div>
+                <button type="button" class="btn btn-primary btn-sm" id="relBaixarSem">{{ ico('download') }} Baixar</button>
+            </div>
+            <div class="rel-op">
+                <span class="envio-op-ico">{{ ico('chart-bar') }}</span>
+                <div class="rel-txt"><strong>Relatório mensal</strong>
+                    <span class="muted small">O mesmo conteúdo, para o mês inteiro. Bom para a prestação de contas.</span>
+                    <div class="rel-filtros"><select id="relMes" aria-label="Mês"></select></div>
+                </div>
+                <button type="button" class="btn btn-primary btn-sm" id="relBaixarMes">{{ ico('download') }} Baixar</button>
+            </div>
+        </div>
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" data-fechar-global>Fechar</button></div>
+    </div>
+</div>
+
+<!-- BACKUP -->
+<div class="modal" id="modalBackup">
+    <div role="dialog" aria-modal="true" aria-labelledby="bkTitulo" class="modal-box modal-large">
+        <h3 id="bkTitulo">Backup</h3>
+        <div class="modal-body rel-lista">
+            <div class="rel-op">
+                <span class="envio-op-ico">{{ ico('download') }}</span>
+                <div class="rel-txt"><strong>Baixar backup completo</strong>
+                    <span class="muted small">Um arquivo com tudo: empenhos, itens, pedidos, NFs, pagamentos, fornecedores, histórico e lixeira. Guarde em local seguro (pen drive ou Drive).</span>
+                </div>
+                <a class="btn btn-primary btn-sm" href="/api/backup.json" id="bkBaixar">{{ ico('download') }} Baixar</a>
+            </div>
+            <div class="rel-op rel-op-col">
+                <div class="rel-op-linha">
+                    <span class="envio-op-ico">{{ ico('restore') }}</span>
+                    <div class="rel-txt"><strong>Restaurar de um backup</strong>
+                        <span class="muted small">Substitui <strong>tudo</strong> o que está no sistema pelo conteúdo do arquivo. Use só para recuperar dados perdidos.</span>
+                    </div>
+                    <label class="btn btn-secondary btn-sm" for="bkArquivo">{{ ico('file-upload') }} Escolher arquivo</label>
+                    <input type="file" id="bkArquivo" accept=".json,application/json" hidden>
+                </div>
+                <div id="bkPrevia" hidden></div>
+            </div>
+        </div>
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" data-fechar-global>Fechar</button></div>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='global.js') }}" defer></script>
 <script>
 /* Menu do usuário e menu ☰ do celular (sem dependências) */
 (function () {

@@ -34,6 +34,22 @@ Após 5 senhas erradas em 15 minutos, o acesso daquele endereço fica bloqueado 
 3. **🕘 Histórico** mostra quem fez cada alteração. A aba **Lixeira** permite restaurar exclusões.
 4. **⬇ Excel** baixa uma planilha com empenhos, itens, pedidos e NFs (com a situação de pagamento de cada uma).
 5. **Tema**: o botão 🖥️/🌙/☀️ no topo alterna entre automático (segue o sistema), escuro e claro. A escolha fica salva no navegador.
+6. **Buscar** (ou `Ctrl+K`) no topo acha empenho, fornecedor, pedido, NF ou item de qualquer tela.
+7. **Importar → Nota de Empenho (PDF)**: envie um ou vários PDFs da NE (SIAFI). O sistema lê número, processo, fornecedor e itens por regras fixas (sem IA), mostra a prévia e só grava quando você confirma. A NE não traz a unidade: preencha na prévia.
+8. **Sugestão de pedido**: ao fazer um pedido, o sistema oferece repetir o último ou usar a média dos últimos, sempre limitado ao saldo.
+9. **Relatórios em PDF** (menu do usuário): *Situação dos empenhos* (por fornecedor, com resumo dos itens e barra de liquidado/pago), *Semanal* e *Mensal*.
+10. **Pontualidade do fornecedor**: nota de 0 a 10 (% de pedidos entregues no prazo) e prazo médio real de entrega.
+11. **Backup** (menu do usuário): baixa um arquivo com tudo e permite restaurar (digitando `RESTAURAR`).
+
+## Enviar o pedido direto pelo sistema (opcional)
+Com as variáveis abaixo, o botão **Enviar agora pelo sistema** manda o e-mail com o PDF do pedido anexado. Sem elas, continuam valendo as opções Gmail / Outlook / copiar.
+
+| Variável | Para quê |
+|---|---|
+| `SMTP_USER` | E-mail remetente (ex.: a conta Gmail do setor). |
+| `SMTP_PASSWORD` | **Senha de app** da conta (no Google: Conta → Segurança → Verificação em duas etapas → Senhas de app). Não é a senha normal. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SEGURANCA` | Opcionais. Padrão: `smtp.gmail.com`, `465`, `ssl` (aceita `starttls` ou `nenhuma`). |
+| `SMTP_NOME` | Opcional. Nome que aparece como remetente. |
 
 ## Regras do sistema
 - **Saldo físico** = qtde empenhada − recebido.
@@ -61,6 +77,9 @@ Após 5 senhas erradas em 15 minutos, o acesso daquele endereço fica bloqueado 
 ## Estrutura
 ```
 app.py              # Backend Flask (API, login, histórico, lixeira, PDF, Excel)
+nota_empenho.py     # leitura da Nota de Empenho em PDF (regras fixas, sem IA)
+relatorios.py       # PDFs de situação dos empenhos e relatório semanal/mensal
+static/global.js    # busca geral, relatórios e backup (todas as telas)
 templates/          # index (dashboard), empenhos, historico, login, erro, _topbar
 static/ui.js        # utilitários comuns (formatação, números pt-BR, ordenação)
 static/charts.js    # gráficos em SVG/HTML puro (funcionam offline)

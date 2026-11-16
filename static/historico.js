@@ -9,7 +9,7 @@ const ACAO_ROTULO = {
     LOGIN: ['key', 'Entrou', 'neutro'], DESFAZER: ['arrow-back-up', 'Desfez pagamento', 'atencao'], EXPORTAR: ['download', 'Exportou', 'neutro'],
     IMPORTAR: ['file-upload', 'Importou', 'info'], ENVIAR: ['send', 'E-mail do pedido', 'info'],
 };
-const TIPO_ROTULO = { empenho: ['receipt', 'Empenho'], item: ['file-text', 'Item'], pedido: ['clipboard-list', 'Pedido'], nf: ['file-invoice', 'NF'], pagamento: ['cash', 'Pagamento'], fornecedor: ['truck', 'Fornecedor'] };
+const TIPO_ROTULO = { empenho: ['receipt', 'Empenho'], item: ['file-text', 'Item'], pedido: ['clipboard-list', 'Pedido'], nf: ['file-invoice', 'NF'], pagamento: ['cash', 'Pagamento'], fornecedor: ['truck', 'Fornecedor'], relatorio: ['file-type-pdf', 'Relatório'], backup: ['database', 'Backup'] };
 
 async function carregar() {
     $('listaHist').innerHTML = `<p class="loading-row"><span class="spinner"></span> Carregando…</p>`;

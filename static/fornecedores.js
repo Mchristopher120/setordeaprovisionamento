@@ -18,9 +18,9 @@ function mascaraTel(v) {
 }
 
 async function carregar() {
-    $('tbodyForn').innerHTML = linhaCarregando(6);
+    $('tbodyForn').innerHTML = linhaCarregando(7);
     try { F.lista = await fetchJSON('/api/fornecedores'); }
-    catch (err) { showToast(err.message, 'error'); $('tbodyForn').innerHTML = `<tr><td colspan="6" class="empty">${escapeHTML(err.message)}</td></tr>`; return; }
+    catch (err) { showToast(err.message, 'error'); $('tbodyForn').innerHTML = `<tr><td colspan="7" class="empty">${escapeHTML(err.message)}</td></tr>`; return; }
     render();
 }
 
@@ -49,12 +49,13 @@ function render() {
             <td class="num">${f.empenhos ? `<a href="/empenhos?fornecedor=${encodeURIComponent(f.nome)}">${f.empenhos}</a>` : '<span class="muted">—</span>'}</td>
             <td class="num money">${f.empenhos ? dinheiro(f.a_liquidar) : '<span class="zero">—</span>'}</td>
             <td class="num">${f.pedidos_em_aberto ? `<span class="badge info">${ico('hourglass')} ${f.pedidos_em_aberto}</span>` : '<span class="muted">—</span>'}</td>
+            <td class="text-left">${notaFornecedorHTML(f)}</td>
             <td class="acoes">
                 <button class="btn btn-sm btn-secondary" onclick="abrirForm(${idx})">${f.cadastrado ? `${ico('pencil')} Editar` : `${ico('plus')} Cadastrar contato`}</button>
                 ${f.cadastrado ? `<button class="btn btn-sm btn-danger btn-icone" title="Apagar cadastro" aria-label="Apagar cadastro de ${escapeHTML(f.nome)}" onclick="apagar(${idx})">${ico('trash')}</button>` : ''}
             </td>
         </tr>`;
-    }).join('') : `<tr><td colspan="6" class="empty"><span class="empty-icon">${ico('truck', 'ico ico-empty')}</span>Nenhum fornecedor encontrado.</td></tr>`;
+    }).join('') : `<tr><td colspan="7" class="empty"><span class="empty-icon">${ico('truck', 'ico ico-empty')}</span>Nenhum fornecedor encontrado.</td></tr>`;
 }
 
 function abrirForm(idx) {
