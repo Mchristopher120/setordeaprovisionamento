@@ -17,6 +17,7 @@
         <a href="/empenhos" class="nav-link {{ 'active' if pagina == 'empenhos' }}" {% if pagina == 'empenhos' %}aria-current="page"{% endif %}>{{ ico('receipt') }}Empenhos<span class="nav-cont" id="navPend" hidden></span></a>
         <a href="/fornecedores" class="nav-link {{ 'active' if pagina == 'fornecedores' }}" {% if pagina == 'fornecedores' %}aria-current="page"{% endif %}>{{ ico('truck') }}Fornecedores</a>
         <a href="/historico" class="nav-link {{ 'active' if pagina == 'historico' }}" {% if pagina == 'historico' %}aria-current="page"{% endif %}>{{ ico('history') }}Histórico</a>
+        {% if outro_sistema %}<a href="/ir/estoque" class="nav-link nav-sistema" title="Abrir o sistema de Estoque (sem digitar a senha de novo)">{{ ico('package') }}<span class="nav-sistema-txt">Estoque</span>{{ ico('external-link', 'ico ico-sai') }}</a>{% endif %}
     </nav>
 
     <button type="button" class="busca-btn" id="buscaBtn" aria-haspopup="dialog" title="Buscar em todo o sistema (Ctrl+K)">
