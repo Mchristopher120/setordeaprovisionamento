@@ -1632,3 +1632,21 @@ a.rank-label:hover { color: var(--primary-dark); text-decoration: underline; }
 .forn-aberto-topo { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .forn-aberto-nota { margin-top: 8px; }
 .page-head-acoes { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+/* Atalho para o outro sistema do setor (Aprovisionamento <-> Estoque) */
+.nav-sistema { margin-left: 6px; }
+.nav-sistema::before { content: ""; position: absolute; left: -4px; top: 50%; height: 20px; margin-top: -10px; border-left: 1px solid rgba(255,255,255,.22); }
+.nav-sistema .ico-sai { width: 13px; height: 13px; opacity: .6; margin-left: -2px; }
+.passagem .spinner { display: inline-block; vertical-align: -3px; margin-right: 6px; }
+.passagem form { margin: 18px 0 10px; }
+@media (max-width: 860px) {
+    .nav-sistema { margin-left: 0; border-top: 1px solid rgba(255,255,255,.12); }
+    .nav-sistema::before { display: none; }
+}
+@media (min-width: 861px) and (max-width: 1260px) {
+    .topbar .nav-link { padding: 0 10px; }
+    .nav-sistema-txt, .nav-sistema .ico-sai { display: none; }
+}
+@media (min-width: 861px) and (max-width: 980px) {
+    .topbar .nav-link:not(.nav-sistema) > .ico { display: none; }
+}

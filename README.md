@@ -51,6 +51,16 @@ Com as variáveis abaixo, o botão **Enviar agora pelo sistema** manda o e-mail 
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SEGURANCA` | Opcionais. Padrão: `smtp.gmail.com`, `465`, `ssl` (aceita `starttls` ou `nenhuma`). |
 | `SMTP_NOME` | Opcional. Nome que aparece como remetente. |
 
+## Atalho para o sistema de Estoque (entrada direta)
+Na barra de cima aparece **Estoque**, que abre o outro sistema do setor já com o seu nome, sem digitar a senha de novo.
+
+| Variável (Vercel) | Para quê |
+|---|---|
+| `ESTOQUE_URL` | Endereço do sistema de Estoque (ex.: `https://gestaoestoque.vercel.app`). Sem ela, o atalho não aparece. |
+| `SSO_SECRET` | Chave secreta **igual nos dois sistemas** (no mínimo 16 caracteres, de preferência 40 ou mais, aleatória). Sem ela, o atalho só abre o outro sistema e ele pede a senha. |
+
+O passe de entrada é assinado com essa chave, vale 60 segundos e só pode ser usado uma vez. Trocar a `SSO_SECRET` num sistema sem trocar no outro só desliga a entrada direta.
+
 ## Regras do sistema
 - **Saldo físico** = qtde empenhada − recebido.
 - **Saldo a pedir** = qtde empenhada − recebido − pedido em aberto. Um pedido novo não pode passar dele.
